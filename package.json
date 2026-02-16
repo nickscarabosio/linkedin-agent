@@ -1,0 +1,20 @@
+{
+  "name": "hood-hero-recruiter",
+  "version": "1.0.0",
+  "description": "Automated LinkedIn recruiting agent",
+  "private": true,
+  "workspaces": [
+    "electron-app",
+    "dashboard",
+    "telegram-bot",
+    "shared"
+  ],
+  "scripts": {
+    "install-all": "npm install && npm install --workspace=electron-app && npm install --workspace=dashboard && npm install --workspace=telegram-bot && npm install --workspace=shared",
+    "dev": "concurrently \"npm run dev --workspace=telegram-bot\" \"npm run dev --workspace=dashboard\" \"npm run dev --workspace=electron-app\"",
+    "build": "npm run build --workspace=dashboard && npm run build --workspace=electron-app"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

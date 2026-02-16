@@ -1,0 +1,28 @@
+{
+  "name": "hood-hero-recruiter-electron",
+  "version": "1.0.0",
+  "description": "LinkedIn automation desktop app",
+  "main": "dist/index.js",
+  "homepage": "./",
+  "scripts": {
+    "dev": "concurrently \"tsc --watch\" \"wait-on dist/index.js && electron dist/index.js\"",
+    "build": "tsc",
+    "start": "electron dist/index.js",
+    "package": "electron-builder"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.1.0",
+    "puppeteer-core": "^21.6.1",
+    "axios": "^1.6.5",
+    "dotenv": "^16.3.1",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.6",
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.4",
+    "concurrently": "^8.2.2",
+    "wait-on": "^7.2.0"
+  }
+}
