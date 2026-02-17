@@ -6,8 +6,10 @@ import { initNotifier } from "./telegram-notifier";
 
 dotenv.config();
 
+const isProduction = process.env.RAILWAY_PUBLIC_DOMAIN != null;
+
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, {
-  polling: { interval: 2000, params: { timeout: 10 } },
+  polling: isProduction ? false : { interval: 2000, params: { timeout: 10 } },
 });
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -326,21 +328,47 @@ async function handlePause(query: any, campaignId: string) {
 // Start bot + API server
 const API_PORT = parseInt(process.env.API_PORT || "3001", 10);
 
-testConnection().then(() => {
+testConnection().then(async () => {
   console.log("🤖 Telegram bot started");
-  console.log(`📱 Bot is polling for messages...`);
 
   // Start Express API server alongside the bot
   const apiApp = createApiServer(db);
-  apiApp.listen(API_PORT, () => {
-    console.log(`🌐 API server listening on port ${API_PORT}`);
-  });
+
+  if (isProduction) {
+    const webhookPath = `/webhook/${process.env.TELEGRAM_BOT_TOKEN}`;
+    const webhookUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
+
+    // Mount webhook handler on the Express app
+    apiApp.use(webhookPath, (req: any, _res: any, next: any) => {
+      if (req.method === "POST") {
+        bot.processUpdate(req.body);
+        _res.sendStatus(200);
+      } else {
+        next();
+      }
+    });
+
+    apiApp.listen(API_PORT, async () => {
+      console.log(`🌐 API server listening on port ${API_PORT}`);
+      await bot.setWebHook(webhookUrl);
+      console.log(`🔗 Webhook set: ${webhookUrl}`);
+    });
+  } else {
+    console.log(`📱 Bot is polling for messages...`);
+    apiApp.listen(API_PORT, () => {
+      console.log(`🌐 API server listening on port ${API_PORT}`);
+    });
+  }
 });
 
 // Handle graceful shutdown (SIGTERM from Railway, SIGINT from local)
 async function shutdown() {
   console.log("\n🛑 Shutting down bot...");
-  await bot.stopPolling();
+  if (isProduction) {
+    await bot.deleteWebHook();
+  } else {
+    await bot.stopPolling();
+  }
   await db.end();
   process.exit(0);
 }
