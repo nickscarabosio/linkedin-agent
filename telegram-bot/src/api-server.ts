@@ -231,6 +231,7 @@ export function createApiServer(db: Pool) {
 - "role_title": the job title
 - "role_description": a concise summary of the role (2-4 sentences)
 - "ideal_candidate_profile": what the ideal candidate looks like (skills, experience, traits)
+- "linkedin_search_url": a LinkedIn People Search URL to find candidates matching this role. Build it using https://www.linkedin.com/search/results/people/?keywords=KEYWORDS&origin=GLOBAL_SEARCH_HEADER where KEYWORDS are URL-encoded search terms combining the role title and 2-3 key skills. Focus on terms a candidate would have in their profile headline or title. For example, for a Senior React Engineer role needing TypeScript and Node.js, use keywords like "Senior React Engineer TypeScript". Keep it focused — 3-5 keywords max.
 
 If a field is not clearly present, use an empty string.
 
@@ -259,6 +260,7 @@ ${text}`,
         role_title: parsed.role_title || "",
         role_description: parsed.role_description || "",
         ideal_candidate_profile: parsed.ideal_candidate_profile || "",
+        linkedin_search_url: parsed.linkedin_search_url || "",
       });
     } catch (error) {
       console.error("POST /api/ai/parse-jd error:", error);

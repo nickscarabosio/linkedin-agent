@@ -58,6 +58,7 @@ export default function NewCampaignPage() {
     if (data.role_title) setValue("role_title", data.role_title);
     if (data.role_description) setValue("role_description", data.role_description);
     if (data.ideal_candidate_profile) setValue("ideal_candidate_profile", data.ideal_candidate_profile);
+    if (data.linkedin_search_url) setValue("linkedin_search_url", data.linkedin_search_url);
     setJdSuccess(true);
     setTimeout(() => setJdSuccess(false), 5000);
   };
@@ -233,6 +234,9 @@ export default function NewCampaignPage() {
         <div>
           <label className="block text-sm font-medium text-gray-700">LinkedIn Search URL</label>
           <Input type="url" className="mt-1" {...register("linkedin_search_url")} />
+          <p className="mt-1 text-xs text-gray-400">
+            AI-recommended based on the job description. Review and adjust the search URL to refine your candidate results.
+          </p>
           {errors.linkedin_search_url && <p className="mt-1 text-sm text-red-600">{errors.linkedin_search_url.message}</p>}
         </div>
 

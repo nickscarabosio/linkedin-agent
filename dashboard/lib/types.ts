@@ -128,6 +128,7 @@ export interface ParsedJD {
   role_title: string;
   role_description: string;
   ideal_candidate_profile: string;
+  linkedin_search_url: string;
 }
 
 export interface Settings {
