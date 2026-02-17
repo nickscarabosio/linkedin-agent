@@ -1,6 +1,8 @@
 import TelegramBot, { InlineKeyboardMarkup } from "node-telegram-bot-api";
 import { Pool } from "pg";
 import dotenv from "dotenv";
+import { createApiServer } from "./api-server";
+import { initNotifier, sendApprovalNotification } from "./telegram-notifier";
 
 dotenv.config();
 
@@ -8,17 +10,11 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, { polling: true });
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const CORWIN_CHAT_ID = parseInt(process.env.CORWIN_TELEGRAM_CHAT_ID!);
+const NICK_CHAT_ID = parseInt(process.env.NICK_TELEGRAM_CHAT_ID!);
+const NOTIFY_CHAT_IDS = [CORWIN_CHAT_ID, NICK_CHAT_ID].filter(id => !isNaN(id));
 
-interface Approval {
-  id: number;
-  candidate_name: string;
-  candidate_title: string;
-  candidate_company: string;
-  linkedin_url: string;
-  proposed_text: string;
-  context: string;
-  approval_type: string;
-}
+// Initialize the Telegram notifier so the API server can send notifications
+initNotifier(bot, NOTIFY_CHAT_IDS);
 
 // Test database connection
 async function testConnection() {
@@ -122,22 +118,23 @@ bot.onText(/\/help/, async (msg) => {
 });
 
 // Handle callback queries (button presses)
+// Callback data format: "action:uuid" (compact to fit Telegram's 64-byte limit)
 bot.on("callback_query", async (query) => {
   try {
-    const data = JSON.parse(query.data!);
+    const [action, id] = query.data!.split(":");
 
-    switch (data.action) {
+    switch (action) {
       case "approve":
-        await handleApprove(query, data.id);
+        await handleApprove(query, id);
         break;
       case "skip":
-        await handleSkip(query, data.id);
+        await handleSkip(query, id);
         break;
       case "pause":
-        await handlePause(query, data.campaignId);
+        await handlePause(query, id);
         break;
       default:
-        console.warn("Unknown action:", data.action);
+        console.warn("Unknown action:", action);
     }
   } catch (error) {
     console.error("Callback query error:", error);
@@ -148,9 +145,8 @@ bot.on("callback_query", async (query) => {
   }
 });
 
-async function handleApprove(query: any, approvalId: number) {
+async function handleApprove(query: any, approvalId: string) {
   try {
-    // Update approval status
     await db.query(
       "UPDATE approval_queue SET status = 'approved', responded_at = NOW() WHERE id = $1",
       [approvalId]
@@ -176,7 +172,7 @@ async function handleApprove(query: any, approvalId: number) {
   }
 }
 
-async function handleSkip(query: any, approvalId: number) {
+async function handleSkip(query: any, approvalId: string) {
   try {
     await db.query(
       "UPDATE approval_queue SET status = 'rejected', responded_at = NOW() WHERE id = $1",
@@ -203,7 +199,7 @@ async function handleSkip(query: any, approvalId: number) {
   }
 }
 
-async function handlePause(query: any, campaignId: number) {
+async function handlePause(query: any, campaignId: string) {
   try {
     await db.query("UPDATE campaigns SET status = 'paused' WHERE id = $1", [
       campaignId,
@@ -221,56 +217,18 @@ async function handlePause(query: any, campaignId: number) {
   }
 }
 
-// Public function to send approval request (called by Electron app)
-export async function sendApprovalRequest(approval: Approval) {
-  try {
-    const message =
-      `🎯 New Candidate: ${approval.candidate_name}\n` +
-      `📍 ${approval.candidate_title} @ ${approval.candidate_company}\n` +
-      `🔗 ${approval.linkedin_url}\n\n` +
-      `💬 Proposed Message:\n"${approval.proposed_text}"\n\n` +
-      `🤖 Reasoning: ${approval.context}`;
+// Start bot + API server
+const API_PORT = parseInt(process.env.API_PORT || "3001", 10);
 
-    const keyboard: InlineKeyboardMarkup = {
-      inline_keyboard: [
-        [
-          {
-            text: "✅ Approve",
-            callback_data: JSON.stringify({
-              action: "approve",
-              id: approval.id,
-            }),
-          },
-          {
-            text: "❌ Skip",
-            callback_data: JSON.stringify({ action: "skip", id: approval.id }),
-          },
-          {
-            text: "⏸️ Pause",
-            callback_data: JSON.stringify({
-              action: "pause",
-              campaignId: approval.id,
-            }),
-          },
-        ],
-      ],
-    };
-
-    await bot.sendMessage(CORWIN_CHAT_ID, message, {
-      reply_markup: keyboard,
-    });
-
-    console.log(`📨 Approval request sent to Corwin for ${approval.candidate_name}`);
-  } catch (error) {
-    console.error("Send approval request error:", error);
-    throw error;
-  }
-}
-
-// Start bot
 testConnection().then(() => {
   console.log("🤖 Telegram bot started");
   console.log(`📱 Bot is polling for messages...`);
+
+  // Start Express API server alongside the bot
+  const apiApp = createApiServer(db);
+  apiApp.listen(API_PORT, () => {
+    console.log(`🌐 API server listening on port ${API_PORT}`);
+  });
 });
 
 // Handle graceful shutdown

@@ -1,34 +1,54 @@
 import axios, { AxiosInstance } from "axios";
 
 interface Candidate {
-  id: number;
-  campaign_id: number;
+  id: string;
+  campaign_id: string;
   name: string;
   title: string;
   company: string;
+  location: string;
   linkedin_url: string;
 }
 
+interface Campaign {
+  id: string;
+  title: string;
+  role_title: string;
+  role_description: string;
+  ideal_candidate_profile: string;
+  linkedin_search_url: string;
+  priority: number;
+  status: string;
+}
+
 interface ApprovalRequest {
-  id?: number;
-  candidate_id: number;
-  campaign_id: number;
-  candidate_name: string;
-  candidate_title: string;
-  candidate_company: string;
-  linkedin_url: string;
+  candidate_id: string;
+  campaign_id: string;
   proposed_text: string;
   context: string;
+  reasoning?: string;
   approval_type: string;
 }
 
 interface AgentAction {
-  candidate_id: number;
-  campaign_id: number;
+  candidate_id: string;
+  campaign_id: string;
   action_type: string;
   success: boolean;
   error_message?: string;
-  metadata?: Record<string, any>;
+  details?: Record<string, any>;
+}
+
+interface NewCandidate {
+  campaign_id: string;
+  linkedin_profile_id?: string;
+  name: string;
+  title?: string;
+  company?: string;
+  location?: string;
+  linkedin_url: string;
+  summary?: string;
+  match_score?: number;
 }
 
 export class ApiClient {
@@ -51,7 +71,7 @@ export class ApiClient {
     }
   }
 
-  async markApprovalSent(approvalId: number): Promise<void> {
+  async markApprovalSent(approvalId: string): Promise<void> {
     try {
       await this.client.patch(`/api/approvals/${approvalId}`, {
         status: "sent",
@@ -63,7 +83,7 @@ export class ApiClient {
   }
 
   async markApprovalFailed(
-    approvalId: number,
+    approvalId: string,
     reason: string
   ): Promise<void> {
     try {
@@ -121,7 +141,6 @@ export class ApiClient {
       return response.data;
     } catch (error) {
       console.error("Error getting settings:", error);
-      // Return defaults
       return {
         pause_weekends: true,
         working_hours_start: "09:00",
@@ -130,7 +149,7 @@ export class ApiClient {
     }
   }
 
-  async getCandidateProfile(candidateId: number): Promise<any> {
+  async getCandidateProfile(candidateId: string): Promise<any> {
     try {
       const response = await this.client.get(
         `/api/candidates/${candidateId}`
@@ -138,6 +157,26 @@ export class ApiClient {
       return response.data;
     } catch (error) {
       console.error("Error getting candidate profile:", error);
+      return null;
+    }
+  }
+
+  async getActiveCampaigns(): Promise<Campaign[]> {
+    try {
+      const response = await this.client.get("/api/campaigns/active");
+      return response.data;
+    } catch (error) {
+      console.error("Error getting active campaigns:", error);
+      return [];
+    }
+  }
+
+  async createCandidate(candidate: NewCandidate): Promise<Candidate | null> {
+    try {
+      const response = await this.client.post("/api/candidates", candidate);
+      return response.data;
+    } catch (error) {
+      console.error("Error creating candidate:", error);
       return null;
     }
   }

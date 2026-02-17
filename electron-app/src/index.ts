@@ -11,6 +11,7 @@ dotenv.config();
 
 let mainWindow: BrowserWindow | null = null;
 let mainLoop: MainLoop | null = null;
+let browserController: BrowserController | null = null;
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -23,10 +24,8 @@ async function createWindow() {
     },
   });
 
-  // Load placeholder HTML
   mainWindow.loadFile(path.join(__dirname, "../public/index.html"));
 
-  // Open devtools in dev mode
   if (process.env.NODE_ENV === "development") {
     mainWindow.webContents.openDevTools();
   }
@@ -38,9 +37,14 @@ async function createWindow() {
 
 async function initializeServices() {
   const claudeClient = new ClaudeClient(process.env.CLAUDE_API_KEY!);
-  const browserController = new BrowserController(process.env.CHROME_PATH);
+
+  browserController = new BrowserController(
+    process.env.CHROME_PATH || undefined
+  );
+  await browserController.initialize();
+
   const linkedinService = new LinkedInService(browserController);
-  const apiClient = new ApiClient(process.env.API_URL!);
+  const apiClient = new ApiClient(process.env.API_URL || "http://localhost:3001");
 
   mainLoop = new MainLoop(claudeClient, linkedinService, apiClient);
 
@@ -55,7 +59,6 @@ app.on("ready", async () => {
     console.log("✅ Services initialized");
     console.log("🚀 Starting main loop...");
 
-    // Start the main recruiting loop in background
     loop.start().catch((error) => {
       console.error("❌ Main loop error:", error);
     });
@@ -81,6 +84,9 @@ process.on("SIGINT", async () => {
   console.log("\n🛑 Shutting down...");
   if (mainLoop) {
     await mainLoop.stop();
+  }
+  if (browserController) {
+    await browserController.close();
   }
   process.exit(0);
 });

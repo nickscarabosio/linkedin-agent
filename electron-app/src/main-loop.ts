@@ -1,6 +1,7 @@
 import { ClaudeClient } from "./services/claude-client";
 import { LinkedInService } from "./services/linkedin-service";
 import { ApiClient } from "./services/api-client";
+import { randomDelay } from "./services/human-behavior";
 
 export class MainLoop {
   private isRunning = false;
@@ -16,6 +17,14 @@ export class MainLoop {
     this.isRunning = true;
     console.log("🎯 Main recruiting loop started");
 
+    // Step 0: Log into LinkedIn
+    try {
+      await this.linkedin.login();
+    } catch (error) {
+      console.error("❌ LinkedIn login failed:", error);
+      throw error;
+    }
+
     while (this.isRunning) {
       try {
         // 1. Check working hours
@@ -25,13 +34,16 @@ export class MainLoop {
           continue;
         }
 
-        // 2. Process approved messages
+        // 2. Process approved messages (send on LinkedIn)
         await this.processApprovedMessages();
 
-        // 3. Find new candidates to contact
+        // 3. Discover new candidates from LinkedIn search
+        await this.discoverCandidates();
+
+        // 4. Generate messages for qualified candidates and submit for approval
         await this.findAndContactCandidates();
 
-        // 4. Check for responses
+        // 5. Check for responses (stub)
         await this.checkForResponses();
 
         // Sleep before next iteration
@@ -48,6 +60,7 @@ export class MainLoop {
     this.isRunning = false;
   }
 
+  /** Send approved messages/connection requests on LinkedIn */
   private async processApprovedMessages() {
     try {
       console.log("📤 Processing approved messages...");
@@ -60,27 +73,23 @@ export class MainLoop {
 
       for (const approval of approved) {
         try {
-          // Send the message based on type
+          const text = approval.approved_text || approval.proposed_text;
+
           if (approval.approval_type === "connection_request") {
             await this.linkedin.sendConnectionRequest(
               approval.linkedin_url,
-              approval.approved_text || approval.proposed_text
+              text
             );
           } else {
-            await this.linkedin.sendMessage(
-              approval.linkedin_url,
-              approval.approved_text || approval.proposed_text
-            );
+            await this.linkedin.sendMessage(approval.linkedin_url, text);
           }
 
-          // Mark as sent
           await this.api.markApprovalSent(approval.id);
 
-          // Log action
           await this.api.logAction({
             candidate_id: approval.candidate_id,
             campaign_id: approval.campaign_id,
-            action_type: approval.approval_type,
+            action_type: approval.approval_type === "connection_request" ? "connection_request_sent" : "message_sent",
             success: true,
           });
 
@@ -88,8 +97,8 @@ export class MainLoop {
             `✅ Sent ${approval.approval_type} to ${approval.candidate_name}`
           );
 
-          // Random delay between messages
-          await this.sleep(this.randomDelay());
+          // Human-like delay between messages (45-180s)
+          await randomDelay(45000, 180000);
         } catch (error) {
           console.error(`❌ Failed to send approval ${approval.id}:`, error);
           await this.api.markApprovalFailed(
@@ -103,18 +112,73 @@ export class MainLoop {
     }
   }
 
+  /** Search LinkedIn for new candidates and insert them via API */
+  private async discoverCandidates() {
+    try {
+      console.log("🔎 Discovering new candidates...");
+
+      const campaigns = await this.api.getActiveCampaigns();
+      if (campaigns.length === 0) {
+        console.log("📋 No active campaigns");
+        return;
+      }
+
+      for (const campaign of campaigns) {
+        if (!campaign.linkedin_search_url) {
+          console.log(`⏭️ Campaign "${campaign.title}" has no search URL, skipping`);
+          continue;
+        }
+
+        // Check rate limits before searching
+        const canSearch = await this.api.checkRateLimits("connection_request");
+        if (!canSearch) {
+          console.log("⚠️ Rate limit reached, skipping discovery");
+          return;
+        }
+
+        const scraped = await this.linkedin.findCandidates(
+          campaign.linkedin_search_url
+        );
+
+        let inserted = 0;
+        for (const candidate of scraped) {
+          const result = await this.api.createCandidate({
+            campaign_id: campaign.id,
+            name: candidate.name,
+            title: candidate.title,
+            company: candidate.company,
+            location: candidate.location,
+            linkedin_url: candidate.linkedin_url,
+          });
+
+          if (result && !(result as any).already_exists) {
+            inserted++;
+          }
+        }
+
+        console.log(
+          `📥 Campaign "${campaign.title}": ${inserted} new candidates inserted (${scraped.length} found)`
+        );
+
+        // Delay between campaign searches
+        await randomDelay(5000, 10000);
+      }
+    } catch (error) {
+      console.error("Error discovering candidates:", error);
+    }
+  }
+
+  /** Generate messages for qualified candidates and create approval requests */
   private async findAndContactCandidates() {
     try {
-      console.log("🔍 Finding new candidates...");
+      console.log("🔍 Finding qualified candidates to contact...");
 
-      // Check rate limits
-      const canContact = await this.api.checkRateLimits("message_sent");
+      const canContact = await this.api.checkRateLimits("connection_request");
       if (!canContact) {
         console.log("⚠️ Rate limit reached for today");
         return;
       }
 
-      // Get qualified candidates who haven't been contacted yet
       const candidates = await this.api.getQualifiedCandidates();
 
       if (candidates.length === 0) {
@@ -122,30 +186,42 @@ export class MainLoop {
         return;
       }
 
+      // Load campaigns for context
+      const campaigns = await this.api.getActiveCampaigns();
+      const campaignMap = new Map(campaigns.map((c) => [c.id, c]));
+
       // Process up to 5 candidates per cycle
       for (const candidate of candidates.slice(0, 5)) {
         try {
-          // Generate message using Claude
+          const campaign = campaignMap.get(candidate.campaign_id);
+
           const { message, reasoning } = await this.claude.generateMessage(
-            candidate
+            candidate,
+            campaign
+              ? {
+                  role_title: campaign.role_title,
+                  role_description: campaign.role_description,
+                  ideal_candidate_profile: campaign.ideal_candidate_profile,
+                }
+              : undefined
           );
 
-          // Create approval request
+          // All initial outreach as connection_request (can't InMail strangers)
           await this.api.createApprovalRequest({
             candidate_id: candidate.id,
             campaign_id: candidate.campaign_id,
-            candidate_name: candidate.name,
-            candidate_title: candidate.title,
-            candidate_company: candidate.company,
-            linkedin_url: candidate.linkedin_url,
             proposed_text: message,
             context: reasoning,
-            approval_type: "message",
+            reasoning,
+            approval_type: "connection_request",
           });
 
           console.log(`📝 Created approval request for ${candidate.name}`);
         } catch (error) {
-          console.error(`❌ Failed to process candidate ${candidate.id}:`, error);
+          console.error(
+            `❌ Failed to process candidate ${candidate.id}:`,
+            error
+          );
         }
       }
     } catch (error) {
@@ -156,7 +232,7 @@ export class MainLoop {
   private async checkForResponses() {
     try {
       console.log("📬 Checking for responses...");
-      // TODO: Implement response checking from LinkedIn inbox
+      await this.linkedin.checkInbox();
       console.log("✅ Response check complete");
     } catch (error) {
       console.error("Error checking for responses:", error);
@@ -168,12 +244,10 @@ export class MainLoop {
     const hour = now.getHours();
     const day = now.getDay();
 
-    // Get settings from API
     try {
       const settings = await this.api.getSettings();
-      const pause_weekends = settings.pause_weekends;
 
-      if (pause_weekends && (day === 0 || day === 6)) {
+      if (settings.pause_weekends && (day === 0 || day === 6)) {
         return false;
       }
 
@@ -185,15 +259,9 @@ export class MainLoop {
       return hour >= startHour && hour < endHour;
     } catch (error) {
       console.error("Error checking working hours:", error);
-      // Fallback: 9am-6pm, no weekends
       if (day === 0 || day === 6) return false;
       return hour >= 9 && hour < 18;
     }
-  }
-
-  private randomDelay(): number {
-    // Random delay between 45-180 seconds
-    return Math.floor(Math.random() * (180000 - 45000 + 1)) + 45000;
   }
 
   private sleep(ms: number): Promise<void> {
