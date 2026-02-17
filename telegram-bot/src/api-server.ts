@@ -151,6 +151,7 @@ export function createApiServer(db: Pool) {
   app.use("/api/me", requireAuth);
   app.use("/api/approvals", requireAuth);
   app.use("/api/candidates", requireAuth);
+  app.use("/api/notes", requireAuth);
   app.use("/api/campaigns", requireAuth);
   app.use("/api/actions", requireAuth);
   app.use("/api/rate-limits", requireAuth);
@@ -685,6 +686,108 @@ export function createApiServer(db: Pool) {
       res.status(201).json(result.rows[0]);
     } catch (error) {
       console.error("POST /api/candidates error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ============================================================
+  // CANDIDATE NOTES
+  // ============================================================
+
+  // GET /api/candidates/:id/notes — all notes for a candidate, newest first
+  app.get("/api/candidates/:id/notes", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const result = await db.query(
+        `SELECT * FROM candidate_notes WHERE candidate_id = $1 ORDER BY created_at DESC`,
+        [id]
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("GET /api/candidates/:id/notes error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/candidates/:id/notes — create a note (optionally a reminder)
+  app.post("/api/candidates/:id/notes", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { content, remind_at } = req.body;
+
+      if (!content) {
+        res.status(400).json({ error: "content is required" });
+        return;
+      }
+
+      const result = await db.query(
+        `INSERT INTO candidate_notes (candidate_id, user_id, content, remind_at)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [id, req.user!.userId, content, remind_at || null]
+      );
+
+      res.status(201).json(result.rows[0]);
+    } catch (error) {
+      console.error("POST /api/candidates/:id/notes error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/notes/:id — update note content or mark reminder complete
+  app.patch("/api/notes/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { content, completed_at } = req.body;
+
+      const setClauses: string[] = ["updated_at = NOW()"];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (content !== undefined) {
+        setClauses.push(`content = $${idx++}`);
+        values.push(content);
+      }
+      if (completed_at !== undefined) {
+        setClauses.push(`completed_at = $${idx++}`);
+        values.push(completed_at);
+      }
+
+      values.push(id);
+      const result = await db.query(
+        `UPDATE candidate_notes SET ${setClauses.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Note not found" });
+        return;
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error("PATCH /api/notes/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // DELETE /api/notes/:id — delete a note
+  app.delete("/api/notes/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const result = await db.query(
+        `DELETE FROM candidate_notes WHERE id = $1 RETURNING id`,
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Note not found" });
+        return;
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("DELETE /api/notes/:id error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

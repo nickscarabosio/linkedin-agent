@@ -51,6 +51,16 @@ export interface Approval {
   responded_at: string | null;
 }
 
+export interface CandidateNote {
+  id: string;
+  candidate_id: string;
+  user_id: string;
+  content: string;
+  remind_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
 export interface AuditLog {
   id: string;
   user_id: string;

@@ -6,6 +6,7 @@ import { Check, HelpCircle, X, ChevronRight, ExternalLink, Briefcase, Building2,
 import { getApiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
+import { CandidateProfileModal } from "./candidate-profile-modal";
 import type { Approval } from "@/lib/types";
 
 interface ApprovalCardProps {
@@ -17,6 +18,7 @@ interface ApprovalCardProps {
 
 export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: ApprovalCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
   const api = getApiClient();
   const queryClient = useQueryClient();
 
@@ -51,21 +53,26 @@ export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: A
         )}
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex-1 flex items-center gap-3 text-left min-w-0"
+          className="shrink-0 p-1"
         >
           <ChevronRight
             className={cn(
-              "h-4 w-4 text-gray-400 shrink-0 transition-transform",
+              "h-4 w-4 text-gray-400 transition-transform",
               expanded && "rotate-90"
             )}
           />
-          <div className="min-w-0">
-            <p className="font-medium text-gray-900 truncate">{approval.candidate_name}</p>
-            <p className="text-sm text-gray-500 truncate">
-              {[approval.candidate_title, approval.candidate_company].filter(Boolean).join(" @ ")}
-            </p>
-          </div>
         </button>
+        <div className="flex-1 min-w-0">
+          <button
+            onClick={() => setShowProfile(true)}
+            className="font-medium text-gray-900 truncate hover:text-blue-600 hover:underline transition-colors text-left block max-w-full"
+          >
+            {approval.candidate_name}
+          </button>
+          <p className="text-sm text-gray-500 truncate">
+            {[approval.candidate_title, approval.candidate_company].filter(Boolean).join(" @ ")}
+          </p>
+        </div>
 
         {/* Action buttons */}
         <div className="flex items-center gap-1 shrink-0">
@@ -148,6 +155,14 @@ export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: A
             </div>
           </div>
         </div>
+      )}
+
+      {/* Profile modal */}
+      {showProfile && (
+        <CandidateProfileModal
+          approval={approval}
+          onClose={() => setShowProfile(false)}
+        />
       )}
     </div>
   );
