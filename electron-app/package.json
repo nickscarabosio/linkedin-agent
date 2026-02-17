@@ -1,5 +1,5 @@
 {
-  "name": "hood-hero-recruiter-electron",
+  "name": "c2c-recruiter-electron",
   "version": "1.0.0",
   "description": "LinkedIn automation desktop app",
   "main": "dist/index.js",

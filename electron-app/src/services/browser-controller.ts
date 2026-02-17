@@ -14,7 +14,7 @@ export class BrowserController {
   constructor(chromePath?: string, userId?: string) {
     this.chromePath = chromePath;
     const profileSuffix = userId ? `chrome-profile-${userId}` : "chrome-profile";
-    this.userDataDir = path.join(os.homedir(), ".hood-hero", profileSuffix);
+    this.userDataDir = path.join(os.homedir(), ".c2c-recruiter", profileSuffix);
   }
 
   async initialize(): Promise<void> {

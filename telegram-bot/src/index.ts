@@ -37,7 +37,7 @@ bot.onText(/\/start/, async (msg) => {
     const user = linked.rows[0];
     await bot.sendMessage(
       chatId,
-      `🎯 Hood Hero Recruiter Bot\n\n` +
+      `🎯 C2C Recruiter Bot\n\n` +
         `Linked as: ${user.name} (${user.email})\n\n` +
         `Commands:\n` +
         `/status - System status\n` +
@@ -47,7 +47,7 @@ bot.onText(/\/start/, async (msg) => {
   } else {
     await bot.sendMessage(
       chatId,
-      `🎯 Hood Hero Recruiter Bot\n\n` +
+      `🎯 C2C Recruiter Bot\n\n` +
         `Your chat ID: ${chatId}\n\n` +
         `To link your account, generate a code from the dashboard and send:\n` +
         `/link <CODE>\n\n` +
@@ -178,7 +178,7 @@ bot.onText(/\/help/, async (msg) => {
 
   await bot.sendMessage(
     chatId,
-    `ℹ️ Hood Hero Recruiter Bot Help\n\n` +
+    `ℹ️ C2C Recruiter Bot Help\n\n` +
       `This bot sends you LinkedIn candidates for approval.\n\n` +
       `When you get a candidate message:\n` +
       `✅ Approve - Send the message\n` +

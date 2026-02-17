@@ -1,4 +1,4 @@
-# Hood Hero Recruiter - LinkedIn Automation Agent
+# Culture to Cash Recruiter - LinkedIn Automation Agent
 
 Automated LinkedIn recruiting system with human approval workflow.
 

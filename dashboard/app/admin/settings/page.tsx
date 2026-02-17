@@ -4,6 +4,21 @@ import { useQuery } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
+import type { Settings } from "@/lib/types";
+
+interface SettingRowProps {
+  label: string;
+  value: string | number | boolean | undefined;
+}
+
+function SettingRow({ label, value }: SettingRowProps) {
+  return (
+    <div className="flex justify-between">
+      <dt className="text-sm text-gray-500">{label}</dt>
+      <dd className="text-sm font-medium text-gray-900">{value ?? "\u2014"}</dd>
+    </div>
+  );
+}
 
 export default function AdminSettingsPage() {
   const { isAdmin } = useAuth();
@@ -15,7 +30,7 @@ export default function AdminSettingsPage() {
     return null;
   }
 
-  const { data: settings, isLoading } = useQuery({
+  const { data: settings, isLoading } = useQuery<Settings>({
     queryKey: ["settings"],
     queryFn: () => api.get("/api/settings").then((r) => r.data),
   });
@@ -67,15 +82,6 @@ export default function AdminSettingsPage() {
       </section>
 
       <p className="text-sm text-gray-400">Settings are currently read-only. Edit via database.</p>
-    </div>
-  );
-}
-
-function SettingRow({ label, value }: { label: string; value: any }) {
-  return (
-    <div className="flex justify-between">
-      <dt className="text-sm text-gray-500">{label}</dt>
-      <dd className="text-sm font-medium text-gray-900">{value ?? "—"}</dd>
     </div>
   );
 }

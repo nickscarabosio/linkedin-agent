@@ -30,7 +30,7 @@ export class LinkedInService {
   constructor(private browser: BrowserController, credentials?: LinkedInCredentials, userId?: string) {
     this.credentials = credentials;
     const cookieSuffix = userId ? `linkedin-cookies-${userId}.json` : "linkedin-cookies.json";
-    this.cookiePath = path.join(os.homedir(), ".hood-hero", cookieSuffix);
+    this.cookiePath = path.join(os.homedir(), ".c2c-recruiter", cookieSuffix);
   }
 
   /** Log in to LinkedIn, restoring cookies if available */

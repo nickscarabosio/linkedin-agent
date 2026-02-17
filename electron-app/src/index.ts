@@ -42,11 +42,11 @@ async function initializeServices() {
   const encryptionKey = process.env.ENCRYPTION_KEY;
 
   // Step 1: Authenticate
-  const email = process.env.HOOD_HERO_EMAIL;
-  const password = process.env.HOOD_HERO_PASSWORD;
+  const email = process.env.C2C_EMAIL;
+  const password = process.env.C2C_PASSWORD;
 
   if (!email || !password) {
-    throw new Error("HOOD_HERO_EMAIL and HOOD_HERO_PASSWORD must be set in .env");
+    throw new Error("C2C_EMAIL and C2C_PASSWORD must be set in .env");
   }
 
   console.log(`🔐 Authenticating as ${email}...`);

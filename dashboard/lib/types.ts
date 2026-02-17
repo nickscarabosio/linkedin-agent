@@ -1,0 +1,86 @@
+// API response types
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "user";
+  telegram_chat_id: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Campaign {
+  id: string;
+  title: string;
+  role_title: string;
+  role_description: string;
+  ideal_candidate_profile: string | null;
+  linkedin_search_url: string | null;
+  status: "active" | "paused" | "completed";
+  priority: number;
+  created_at: string;
+}
+
+export interface Candidate {
+  id: string;
+  campaign_id: string;
+  campaign_title?: string;
+  name: string;
+  title: string;
+  company: string;
+  location: string;
+  linkedin_url: string;
+  status: "new" | "contacted" | "responded" | "rejected";
+  created_at: string;
+}
+
+export interface Approval {
+  id: string;
+  candidate_id: string;
+  candidate_name: string;
+  candidate_title: string;
+  candidate_company: string;
+  approval_type: string;
+  proposed_text: string;
+  context: string | null;
+  status: "pending" | "approved" | "rejected" | "sent" | "failed";
+  created_at: string;
+  responded_at: string | null;
+}
+
+export interface AuditLog {
+  id: string;
+  user_id: string;
+  user_name: string | null;
+  action: string;
+  target: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AdminStats {
+  active_campaigns: number;
+  total_candidates: number;
+  pending_approvals: number;
+  today_actions: number;
+}
+
+export interface Settings {
+  daily_connection_requests: number;
+  daily_messages: number;
+  weekly_connection_cap: number;
+  min_delay_seconds: number;
+  max_delay_seconds: number;
+  working_hours_start: string;
+  working_hours_end: string;
+  timezone: string;
+  pause_weekends: boolean;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  wait_after_acceptance_hours: number;
+  include_note_with_request: boolean;
+  max_follow_ups: number;
+  follow_up_delay_days: number;
+}

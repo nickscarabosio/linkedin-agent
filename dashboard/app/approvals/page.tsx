@@ -3,13 +3,27 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
+import type { Approval } from "@/lib/types";
+
+const statusVariant: Record<string, "warning" | "info" | "danger" | "success" | "default"> = {
+  pending: "warning",
+  approved: "info",
+  rejected: "danger",
+  sent: "success",
+  failed: "danger",
+};
+
+const statuses = ["", "pending", "approved", "rejected", "sent", "failed"];
 
 export default function ApprovalsPage() {
   const api = getApiClient();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("pending");
 
-  const { data: approvals, isLoading } = useQuery({
+  const { data: approvals, isLoading } = useQuery<Approval[]>({
     queryKey: ["approvals", { status: statusFilter }],
     queryFn: () =>
       api.get("/api/approvals", { params: statusFilter ? { status: statusFilter } : {} }).then((r) => r.data),
@@ -23,22 +37,19 @@ export default function ApprovalsPage() {
     },
   });
 
-  const statuses = ["", "pending", "approved", "rejected", "sent", "failed"];
-
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-gray-900">Approval Queue</h1>
-        <select
+        <Select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
         >
           <option value="">All</option>
           {statuses.filter(Boolean).map((s) => (
             <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
           ))}
-        </select>
+        </Select>
       </div>
 
       <div className="bg-white rounded-lg shadow overflow-hidden">
@@ -48,13 +59,13 @@ export default function ApprovalsPage() {
           <div className="p-6 text-center text-gray-500">No approvals found.</div>
         ) : (
           <div className="divide-y divide-gray-200">
-            {approvals.map((a: any) => (
+            {approvals.map((a) => (
               <div key={a.id} className="px-6 py-4">
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     <div className="flex items-center gap-3">
                       <p className="font-medium text-gray-900">{a.candidate_name}</p>
-                      <StatusBadge status={a.status} />
+                      <Badge variant={statusVariant[a.status] ?? "default"}>{a.status}</Badge>
                       <span className="text-xs text-gray-400">{a.approval_type}</span>
                     </div>
                     <p className="text-sm text-gray-500 mt-0.5">
@@ -70,20 +81,22 @@ export default function ApprovalsPage() {
 
                   {a.status === "pending" && (
                     <div className="flex gap-2 ml-4 flex-shrink-0">
-                      <button
+                      <Button
+                        size="sm"
+                        variant="success"
                         onClick={() => updateApproval.mutate({ id: a.id, status: "approved" })}
                         disabled={updateApproval.isPending}
-                        className="px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 disabled:opacity-50"
                       >
                         Approve
-                      </button>
-                      <button
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="destructive"
                         onClick={() => updateApproval.mutate({ id: a.id, status: "rejected" })}
                         disabled={updateApproval.isPending}
-                        className="px-3 py-1.5 bg-red-100 text-red-700 text-sm rounded hover:bg-red-200 disabled:opacity-50"
                       >
                         Reject
-                      </button>
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -93,21 +106,5 @@ export default function ApprovalsPage() {
         )}
       </div>
     </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    pending: "bg-yellow-100 text-yellow-800",
-    approved: "bg-blue-100 text-blue-800",
-    rejected: "bg-red-100 text-red-800",
-    sent: "bg-green-100 text-green-800",
-    failed: "bg-red-100 text-red-800",
-  };
-
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${colors[status] || "bg-gray-100 text-gray-800"}`}>
-      {status}
-    </span>
   );
 }

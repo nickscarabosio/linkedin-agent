@@ -5,7 +5,7 @@ import { NavBar } from "@/components/nav-bar";
 import { AuthGate } from "@/components/auth-gate";
 
 export const metadata: Metadata = {
-  title: "Hood Hero Recruiter",
+  title: "C2C Recruiter",
   description: "Automated LinkedIn recruiting agent",
 };
 

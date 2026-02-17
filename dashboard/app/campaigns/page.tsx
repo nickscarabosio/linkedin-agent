@@ -2,12 +2,21 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import Link from "next/link";
+import type { Campaign } from "@/lib/types";
+
+const statusVariant: Record<string, "success" | "warning" | "default"> = {
+  active: "success",
+  paused: "warning",
+  completed: "default",
+};
 
 export default function CampaignsPage() {
   const api = getApiClient();
 
-  const { data: campaigns, isLoading } = useQuery({
+  const { data: campaigns, isLoading } = useQuery<Campaign[]>({
     queryKey: ["campaigns"],
     queryFn: () => api.get("/api/campaigns").then((r) => r.data),
   });
@@ -16,11 +25,8 @@ export default function CampaignsPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-gray-900">Campaigns</h1>
-        <Link
-          href="/campaigns/new"
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
-        >
-          + New Campaign
+        <Link href="/campaigns/new">
+          <Button>+ New Campaign</Button>
         </Link>
       </div>
 
@@ -43,7 +49,7 @@ export default function CampaignsPage() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {campaigns.map((c: any) => (
+              {campaigns.map((c) => (
                 <tr key={c.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                     <Link href={`/campaigns/${c.id}`} className="text-blue-600 hover:underline font-medium">
@@ -52,7 +58,7 @@ export default function CampaignsPage() {
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">{c.role_title}</td>
                   <td className="px-6 py-4">
-                    <StatusBadge status={c.status} />
+                    <Badge variant={statusVariant[c.status] ?? "default"}>{c.status}</Badge>
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">{c.priority}</td>
                 </tr>
@@ -62,19 +68,5 @@ export default function CampaignsPage() {
         )}
       </div>
     </div>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    active: "bg-green-100 text-green-800",
-    paused: "bg-yellow-100 text-yellow-800",
-    completed: "bg-gray-100 text-gray-800",
-  };
-
-  return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colors[status] || "bg-gray-100 text-gray-800"}`}>
-      {status}
-    </span>
   );
 }

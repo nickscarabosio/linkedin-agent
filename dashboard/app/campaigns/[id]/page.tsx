@@ -3,18 +3,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useParams } from "next/navigation";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/cn";
 import Link from "next/link";
+import type { Campaign, Candidate } from "@/lib/types";
 
 export default function CampaignDetailPage() {
   const { id } = useParams();
   const api = getApiClient();
 
-  const { data: campaign, isLoading } = useQuery({
+  const { data: campaign, isLoading } = useQuery<Campaign>({
     queryKey: ["campaign", id],
     queryFn: () => api.get(`/api/campaigns/${id}`).then((r) => r.data),
   });
 
-  const { data: candidates } = useQuery({
+  const { data: candidates } = useQuery<Candidate[]>({
     queryKey: ["candidates", { campaign_id: id }],
     queryFn: () => api.get("/api/candidates", { params: { campaign_id: id } }).then((r) => r.data),
     enabled: !!id,
@@ -23,7 +26,7 @@ export default function CampaignDetailPage() {
   if (isLoading) return <div className="text-gray-500">Loading...</div>;
   if (!campaign) return <div className="text-red-500">Campaign not found</div>;
 
-  const statusCounts = (candidates || []).reduce((acc: Record<string, number>, c: any) => {
+  const statusCounts = (candidates || []).reduce<Record<string, number>>((acc, c) => {
     acc[c.status] = (acc[c.status] || 0) + 1;
     return acc;
   }, {});
@@ -36,9 +39,9 @@ export default function CampaignDetailPage() {
           <h1 className="text-3xl font-bold text-gray-900 mt-2">{campaign.title}</h1>
           <p className="text-gray-500 mt-1">{campaign.role_title}</p>
         </div>
-        <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${campaign.status === "active" ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"}`}>
+        <Badge variant={campaign.status === "active" ? "success" : "warning"}>
           {campaign.status}
-        </span>
+        </Badge>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -74,7 +77,7 @@ export default function CampaignDetailPage() {
             {Object.entries(statusCounts).map(([status, count]) => (
               <div key={status} className="flex justify-between">
                 <span className="text-sm text-gray-600 capitalize">{status}</span>
-                <span className="text-sm font-medium text-gray-900">{count as number}</span>
+                <span className="text-sm font-medium text-gray-900">{count}</span>
               </div>
             ))}
             {Object.keys(statusCounts).length === 0 && (
@@ -99,7 +102,7 @@ export default function CampaignDetailPage() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {candidates.map((c: any) => (
+              {candidates.map((c) => (
                 <tr key={c.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                     <a href={c.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
@@ -109,9 +112,7 @@ export default function CampaignDetailPage() {
                   <td className="px-6 py-4 text-sm text-gray-500">{c.title}</td>
                   <td className="px-6 py-4 text-sm text-gray-500">{c.company}</td>
                   <td className="px-6 py-4">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 capitalize">
-                      {c.status}
-                    </span>
+                    <Badge>{c.status}</Badge>
                   </td>
                 </tr>
               ))}

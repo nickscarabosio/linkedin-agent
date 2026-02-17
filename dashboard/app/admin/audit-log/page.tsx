@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
+import { Badge } from "@/components/ui/badge";
+import type { AuditLog } from "@/lib/types";
 
 export default function AuditLogPage() {
   const { isAdmin } = useAuth();
@@ -15,7 +17,7 @@ export default function AuditLogPage() {
     return null;
   }
 
-  const { data: logs, isLoading } = useQuery({
+  const { data: logs, isLoading } = useQuery<AuditLog[]>({
     queryKey: ["audit-log"],
     queryFn: () => api.get("/api/admin/audit-log").then((r) => r.data),
   });
@@ -41,7 +43,7 @@ export default function AuditLogPage() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {logs.map((log: any) => (
+              {logs.map((log) => (
                 <tr key={log.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 text-sm text-gray-500 whitespace-nowrap">
                     {new Date(log.created_at).toLocaleString()}
@@ -50,13 +52,11 @@ export default function AuditLogPage() {
                     {log.user_name || "System"}
                   </td>
                   <td className="px-6 py-4">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                      {log.action}
-                    </span>
+                    <Badge variant="info">{log.action}</Badge>
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">{log.target || "—"}</td>
+                  <td className="px-6 py-4 text-sm text-gray-500">{log.target || "\u2014"}</td>
                   <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">
-                    {log.details ? JSON.stringify(log.details) : "—"}
+                    {log.details ? JSON.stringify(log.details) : "\u2014"}
                   </td>
                 </tr>
               ))}

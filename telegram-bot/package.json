@@ -1,7 +1,7 @@
 {
-  "name": "hood-hero-telegram-bot",
+  "name": "c2c-telegram-bot",
   "version": "1.0.0",
-  "description": "Telegram approval bot for Hood Hero recruiter",
+  "description": "Telegram approval bot for Culture to Cash recruiter",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",

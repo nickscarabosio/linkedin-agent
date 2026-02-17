@@ -1,59 +1,82 @@
 "use client";
 
 import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
+const passwordSchema = z.object({
+  currentPassword: z.string().min(1, "Current password is required"),
+  newPassword: z.string().min(6, "Must be at least 6 characters"),
+});
+
+type PasswordInput = z.infer<typeof passwordSchema>;
+
+const linkedinSchema = z.object({
+  linkedin_email: z.string().email("Valid email required"),
+  linkedin_password: z.string().min(1, "Password is required"),
+});
+
+type LinkedInInput = z.infer<typeof linkedinSchema>;
+
+interface UserProfile {
+  telegram_chat_id: string | null;
+}
 
 export default function ProfilePage() {
   const { user } = useAuth();
   const api = getApiClient();
 
-  // Password change
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
+  // Password form
   const [pwMsg, setPwMsg] = useState("");
+  const pwForm = useForm<PasswordInput>({
+    resolver: zodResolver(passwordSchema),
+  });
 
   const changePassword = useMutation({
-    mutationFn: () => api.patch("/api/me/password", { currentPassword, newPassword }),
+    mutationFn: (data: PasswordInput) => api.patch("/api/me/password", data),
     onSuccess: () => {
       setPwMsg("Password changed successfully");
-      setCurrentPassword("");
-      setNewPassword("");
+      pwForm.reset();
     },
-    onError: (err: any) => {
-      setPwMsg(err.response?.data?.error || "Failed to change password");
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      setPwMsg(apiErr.response?.data?.error || "Failed to change password");
     },
   });
 
   // Telegram link code
   const [linkCode, setLinkCode] = useState("");
-
   const generateLinkCode = useMutation({
     mutationFn: () => api.post("/api/me/telegram-link-code"),
-    onSuccess: (res) => {
-      setLinkCode(res.data.code);
-    },
+    onSuccess: (res) => setLinkCode(res.data.code),
   });
 
-  // LinkedIn credentials
-  const [liEmail, setLiEmail] = useState("");
-  const [liPassword, setLiPassword] = useState("");
+  // LinkedIn credentials form
   const [liMsg, setLiMsg] = useState("");
+  const liForm = useForm<LinkedInInput>({
+    resolver: zodResolver(linkedinSchema),
+  });
 
-  const { data: profile } = useQuery({
+  const { data: profile } = useQuery<UserProfile>({
     queryKey: ["me"],
     queryFn: () => api.get("/api/me").then((r) => r.data),
   });
 
   const saveLiCreds = useMutation({
-    mutationFn: () => api.put("/api/me/linkedin-credentials", { linkedin_email: liEmail, linkedin_password: liPassword }),
+    mutationFn: (data: LinkedInInput) => api.put("/api/me/linkedin-credentials", data),
     onSuccess: () => {
       setLiMsg("LinkedIn credentials saved");
-      setLiPassword("");
+      liForm.setValue("linkedin_password", "");
     },
-    onError: (err: any) => {
-      setLiMsg(err.response?.data?.error || "Failed to save credentials");
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      setLiMsg(apiErr.response?.data?.error || "Failed to save credentials");
     },
   });
 
@@ -90,36 +113,34 @@ export default function ProfilePage() {
       <section className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Password</h2>
         {pwMsg && <p className="text-sm mb-3 text-blue-600">{pwMsg}</p>}
-        <div className="space-y-3">
-          <input
+        <form onSubmit={pwForm.handleSubmit((data) => changePassword.mutate(data))} className="space-y-3">
+          <Input
             type="password"
             placeholder="Current password"
-            value={currentPassword}
-            onChange={(e) => setCurrentPassword(e.target.value)}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            {...pwForm.register("currentPassword")}
           />
-          <input
+          {pwForm.formState.errors.currentPassword && (
+            <p className="text-sm text-red-600">{pwForm.formState.errors.currentPassword.message}</p>
+          )}
+          <Input
             type="password"
             placeholder="New password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            {...pwForm.register("newPassword")}
           />
-          <button
-            onClick={() => changePassword.mutate()}
-            disabled={!currentPassword || !newPassword || changePassword.isPending}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
-          >
+          {pwForm.formState.errors.newPassword && (
+            <p className="text-sm text-red-600">{pwForm.formState.errors.newPassword.message}</p>
+          )}
+          <Button type="submit" disabled={changePassword.isPending}>
             Update Password
-          </button>
-        </div>
+          </Button>
+        </form>
       </section>
 
       {/* Link Telegram */}
       <section className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Link Telegram</h2>
         <p className="text-sm text-gray-600 mb-4">
-          Generate a code, then send <code className="bg-gray-100 px-1 rounded">/link CODE</code> to the Hood Hero bot on Telegram.
+          Generate a code, then send <code className="bg-gray-100 px-1 rounded">/link CODE</code> to the C2C Recruiter bot on Telegram.
         </p>
         {linkCode ? (
           <div className="bg-blue-50 border border-blue-200 rounded p-4 text-center">
@@ -127,13 +148,9 @@ export default function ProfilePage() {
             <p className="text-3xl font-mono font-bold text-blue-900 mt-2">{linkCode}</p>
           </div>
         ) : (
-          <button
-            onClick={() => generateLinkCode.mutate()}
-            disabled={generateLinkCode.isPending}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
-          >
+          <Button onClick={() => generateLinkCode.mutate()} disabled={generateLinkCode.isPending}>
             Generate Link Code
-          </button>
+          </Button>
         )}
       </section>
 
@@ -144,29 +161,27 @@ export default function ProfilePage() {
           Stored encrypted. The Electron app decrypts them locally.
         </p>
         {liMsg && <p className="text-sm mb-3 text-blue-600">{liMsg}</p>}
-        <div className="space-y-3">
-          <input
+        <form onSubmit={liForm.handleSubmit((data) => saveLiCreds.mutate(data))} className="space-y-3">
+          <Input
             type="email"
             placeholder="LinkedIn email"
-            value={liEmail}
-            onChange={(e) => setLiEmail(e.target.value)}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            {...liForm.register("linkedin_email")}
           />
-          <input
+          {liForm.formState.errors.linkedin_email && (
+            <p className="text-sm text-red-600">{liForm.formState.errors.linkedin_email.message}</p>
+          )}
+          <Input
             type="password"
             placeholder="LinkedIn password"
-            value={liPassword}
-            onChange={(e) => setLiPassword(e.target.value)}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            {...liForm.register("linkedin_password")}
           />
-          <button
-            onClick={() => saveLiCreds.mutate()}
-            disabled={!liEmail || !liPassword || saveLiCreds.isPending}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 disabled:opacity-50"
-          >
+          {liForm.formState.errors.linkedin_password && (
+            <p className="text-sm text-red-600">{liForm.formState.errors.linkedin_password.message}</p>
+          )}
+          <Button type="submit" disabled={saveLiCreds.isPending}>
             Save Credentials
-          </button>
-        </div>
+          </Button>
+        </form>
       </section>
     </div>
   );

@@ -3,6 +3,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { cn } from "@/lib/cn";
+import type { Approval, AdminStats } from "@/lib/types";
+import { Badge } from "@/components/ui/badge";
 
 export default function DashboardPage() {
   const { isAdmin } = useAuth();
@@ -13,12 +16,12 @@ export default function DashboardPage() {
     queryFn: () => api.get("/api/campaigns/active").then((r) => r.data),
   });
 
-  const { data: approvals } = useQuery({
+  const { data: approvals } = useQuery<Approval[]>({
     queryKey: ["approvals-pending"],
     queryFn: () => api.get("/api/approvals", { params: { status: "pending" } }).then((r) => r.data),
   });
 
-  const { data: stats } = useQuery({
+  const { data: stats } = useQuery<AdminStats>({
     queryKey: ["admin-stats"],
     queryFn: () => api.get("/api/admin/stats").then((r) => r.data),
     enabled: isAdmin,
@@ -59,7 +62,7 @@ export default function DashboardPage() {
             </h3>
           </div>
           <div className="divide-y divide-gray-200">
-            {approvals.slice(0, 5).map((a: any) => (
+            {approvals.slice(0, 5).map((a) => (
               <div key={a.id} className="px-6 py-4">
                 <div className="flex justify-between items-start">
                   <div>
@@ -68,9 +71,7 @@ export default function DashboardPage() {
                       {[a.candidate_title, a.candidate_company].filter(Boolean).join(" @ ")}
                     </p>
                   </div>
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                    {a.approval_type}
-                  </span>
+                  <Badge variant="warning">{a.approval_type}</Badge>
                 </div>
                 <p className="mt-2 text-sm text-gray-600 line-clamp-2">
                   &ldquo;{a.proposed_text}&rdquo;
@@ -84,16 +85,23 @@ export default function DashboardPage() {
   );
 }
 
-function StatCard({ label, value, color }: { label: string; value: any; color: string }) {
-  const colorMap: Record<string, string> = {
-    blue: "bg-blue-50 text-blue-600",
-    green: "bg-green-50 text-green-600",
-    yellow: "bg-yellow-50 text-yellow-600",
-    purple: "bg-purple-50 text-purple-600",
-  };
+interface StatCardProps {
+  label: string;
+  value: string | number;
+  color: "blue" | "green" | "yellow" | "purple";
+}
 
+function StatCard({ label, value, color }: StatCardProps) {
   return (
-    <div className={`rounded-lg p-4 ${colorMap[color] || "bg-gray-50 text-gray-600"}`}>
+    <div
+      className={cn(
+        "rounded-lg p-4",
+        color === "blue" && "bg-blue-50 text-blue-600",
+        color === "green" && "bg-green-50 text-green-600",
+        color === "yellow" && "bg-yellow-50 text-yellow-600",
+        color === "purple" && "bg-purple-50 text-purple-600"
+      )}
+    >
       <p className="text-sm font-medium opacity-80">{label}</p>
       <p className="text-3xl font-bold mt-1">{value}</p>
     </div>
