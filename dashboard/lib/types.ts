@@ -78,6 +78,15 @@ export interface AdminStats {
   today_actions: number;
 }
 
+export interface MessageTemplate {
+  id: string;
+  name: string;
+  type: "connection_request" | "message" | "follow_up";
+  body: string;
+  created_by: string | null;
+  created_at: string;
+}
+
 export interface Settings {
   daily_connection_requests: number;
   daily_messages: number;

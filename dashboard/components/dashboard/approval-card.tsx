@@ -1,13 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, HelpCircle, X, ChevronRight, ExternalLink, Briefcase, Building2, MessageSquare } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, HelpCircle, X, ChevronRight, ExternalLink, Briefcase, Building2, MessageSquare, RotateCcw } from "lucide-react";
 import { getApiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
 import { cn } from "@/lib/cn";
 import { CandidateProfileModal } from "./candidate-profile-modal";
-import type { Approval } from "@/lib/types";
+import type { Approval, MessageTemplate } from "@/lib/types";
+
+function resolveMergeFields(template: string, approval: Approval): string {
+  const parts = (approval.candidate_name || "").split(" ");
+  return template
+    .replace(/\{\{first_name\}\}/g, parts[0] || "")
+    .replace(/\{\{last_name\}\}/g, parts.slice(1).join(" ") || "")
+    .replace(/\{\{full_name\}\}/g, approval.candidate_name || "")
+    .replace(/\{\{title\}\}/g, approval.candidate_title || "")
+    .replace(/\{\{company\}\}/g, approval.candidate_company || "");
+}
 
 interface ApprovalCardProps {
   approval: Approval;
@@ -19,12 +31,26 @@ interface ApprovalCardProps {
 export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: ApprovalCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [editedText, setEditedText] = useState(approval.proposed_text);
   const api = getApiClient();
   const queryClient = useQueryClient();
 
+  const isEdited = editedText !== approval.proposed_text;
+
+  const { data: templates } = useQuery<MessageTemplate[]>({
+    queryKey: ["templates", approval.approval_type],
+    queryFn: () => api.get(`/api/templates?type=${approval.approval_type}`).then((r) => r.data),
+    enabled: expanded,
+  });
+
   const mutation = useMutation({
-    mutationFn: (status: "approved" | "rejected") =>
-      api.patch(`/api/approvals/${approval.id}`, { status }),
+    mutationFn: (status: "approved" | "rejected") => {
+      const payload: { status: string; approved_text?: string } = { status };
+      if (status === "approved" && isEdited) {
+        payload.approved_text = editedText;
+      }
+      return api.patch(`/api/approvals/${approval.id}`, payload);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["approvals-pending"] });
       queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
@@ -32,6 +58,14 @@ export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: A
   });
 
   const isPending = mutation.isPending;
+
+  const handleTemplateSelect = (templateId: string) => {
+    if (!templateId || !templates) return;
+    const tmpl = templates.find((t) => t.id === templateId);
+    if (tmpl) {
+      setEditedText(resolveMergeFields(tmpl.body, approval));
+    }
+  };
 
   return (
     <div
@@ -144,15 +178,45 @@ export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: A
             </div>
           )}
 
-          {/* Proposed message */}
+          {/* Editable message */}
           <div>
             <div className="flex items-center gap-1.5 mb-1.5">
               <MessageSquare className="h-3.5 w-3.5 text-gray-500" />
-              <p className="text-sm font-medium text-gray-700">Proposed message</p>
+              <p className="text-sm font-medium text-gray-700">Message</p>
+              {isEdited && (
+                <>
+                  <Badge variant="warning">Edited</Badge>
+                  <button
+                    onClick={() => setEditedText(approval.proposed_text)}
+                    className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 ml-1"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Reset to original
+                  </button>
+                </>
+              )}
             </div>
-            <div className="bg-gray-50 rounded-md p-3 text-sm text-gray-700 whitespace-pre-wrap">
-              {approval.proposed_text}
-            </div>
+
+            {/* Template picker */}
+            {templates && templates.length > 0 && (
+              <Select
+                className="w-full mb-2"
+                value=""
+                onChange={(e) => handleTemplateSelect(e.target.value)}
+              >
+                <option value="">Apply a template...</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </Select>
+            )}
+
+            <Textarea
+              value={editedText}
+              onChange={(e) => setEditedText(e.target.value)}
+              rows={5}
+              className="text-sm text-gray-700"
+            />
           </div>
         </div>
       )}

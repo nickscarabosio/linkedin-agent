@@ -15,6 +15,7 @@ const navLinks = [
 const adminLinks = [
   { href: "/admin/users", label: "Users" },
   { href: "/admin/audit-log", label: "Audit Log" },
+  { href: "/admin/templates", label: "Templates" },
   { href: "/admin/settings", label: "Settings" },
 ];
 

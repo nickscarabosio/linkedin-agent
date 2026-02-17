@@ -156,6 +156,7 @@ export function createApiServer(db: Pool) {
   app.use("/api/actions", requireAuth);
   app.use("/api/rate-limits", requireAuth);
   app.use("/api/settings", requireAuth);
+  app.use("/api/templates", requireAuth);
   app.use("/api/admin", requireAuth, requireAdmin);
 
   // ============================================================
@@ -1061,6 +1062,32 @@ export function createApiServer(db: Pool) {
   });
 
   // ============================================================
+  // MESSAGE TEMPLATES (authenticated users)
+  // ============================================================
+
+  // GET /api/templates?type= — list templates, optional type filter
+  app.get("/api/templates", async (req: Request, res: Response) => {
+    try {
+      const type = req.query.type as string | undefined;
+      let query = `SELECT id, name, type, body, created_by, created_at FROM message_templates`;
+      const params: any[] = [];
+
+      if (type) {
+        query += ` WHERE type = $1`;
+        params.push(type);
+      }
+
+      query += ` ORDER BY name ASC`;
+
+      const result = await db.query(query, params);
+      res.json(result.rows);
+    } catch (error) {
+      console.error("GET /api/templates error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ============================================================
   // ADMIN ENDPOINTS
   // ============================================================
 
@@ -1198,6 +1225,139 @@ export function createApiServer(db: Pool) {
       });
     } catch (error) {
       console.error("GET /api/admin/stats error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/admin/templates — list all with creator name
+  app.get("/api/admin/templates", async (_req: Request, res: Response) => {
+    try {
+      const result = await db.query(
+        `SELECT mt.*, u.name AS creator_name
+         FROM message_templates mt
+         LEFT JOIN users u ON mt.created_by = u.id
+         ORDER BY mt.name ASC`
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("GET /api/admin/templates error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/admin/templates — create template
+  app.post("/api/admin/templates", async (req: Request, res: Response) => {
+    try {
+      const { name, type, body } = req.body;
+      if (!name || !type || !body) {
+        res.status(400).json({ error: "name, type, and body are required" });
+        return;
+      }
+
+      const validTypes = ["connection_request", "message", "follow_up"];
+      if (!validTypes.includes(type)) {
+        res.status(400).json({ error: `type must be one of: ${validTypes.join(", ")}` });
+        return;
+      }
+
+      const result = await db.query(
+        `INSERT INTO message_templates (name, type, body, created_by)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [name, type, body, req.user!.userId]
+      );
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "template_created", `template:${result.rows[0].id}`, JSON.stringify({ name, type })]
+      );
+
+      res.status(201).json(result.rows[0]);
+    } catch (error) {
+      console.error("POST /api/admin/templates error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/admin/templates/:id — update template
+  app.patch("/api/admin/templates/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { name, type, body } = req.body;
+
+      const setClauses: string[] = ["updated_at = NOW()"];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (name !== undefined) {
+        setClauses.push(`name = $${idx++}`);
+        values.push(name);
+      }
+      if (type !== undefined) {
+        const validTypes = ["connection_request", "message", "follow_up"];
+        if (!validTypes.includes(type)) {
+          res.status(400).json({ error: `type must be one of: ${validTypes.join(", ")}` });
+          return;
+        }
+        setClauses.push(`type = $${idx++}`);
+        values.push(type);
+      }
+      if (body !== undefined) {
+        setClauses.push(`body = $${idx++}`);
+        values.push(body);
+      }
+
+      if (values.length === 0) {
+        res.status(400).json({ error: "No fields to update" });
+        return;
+      }
+
+      values.push(id);
+      const result = await db.query(
+        `UPDATE message_templates SET ${setClauses.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Template not found" });
+        return;
+      }
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "template_updated", `template:${id}`, JSON.stringify({ name, type })]
+      );
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error("PATCH /api/admin/templates/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // DELETE /api/admin/templates/:id — delete template
+  app.delete("/api/admin/templates/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const result = await db.query(
+        `DELETE FROM message_templates WHERE id = $1 RETURNING id, name`,
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Template not found" });
+        return;
+      }
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "template_deleted", `template:${id}`, JSON.stringify({ name: result.rows[0].name })]
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("DELETE /api/admin/templates/:id error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });
