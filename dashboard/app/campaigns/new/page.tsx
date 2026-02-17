@@ -4,11 +4,14 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
+import type { ParsedJD, Pipeline } from "@/lib/types";
 
 const campaignSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
@@ -17,27 +20,95 @@ const campaignSchema = z.object({
   ideal_candidate_profile: z.string().optional(),
   linkedin_search_url: z.string().optional(),
   priority: z.string().optional(),
+  pipeline_id: z.string().optional(),
 });
 
 type CampaignInput = z.infer<typeof campaignSchema>;
 
 export default function NewCampaignPage() {
   const router = useRouter();
+  const api = getApiClient();
   const [error, setError] = useState("");
+  const [jdParsing, setJdParsing] = useState(false);
+  const [jdSuccess, setJdSuccess] = useState(false);
+  const [jdError, setJdError] = useState("");
+  const [pasteText, setPasteText] = useState("");
+  const [dragActive, setDragActive] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const { data: pipelines } = useQuery<Pipeline[]>({
+    queryKey: ["pipelines"],
+    queryFn: () => api.get("/api/pipelines").then((r) => r.data),
+  });
+
+  const defaultPipeline = pipelines?.find((p) => p.is_default);
 
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<CampaignInput>({
     resolver: zodResolver(campaignSchema),
-    defaultValues: { priority: "1" },
+    defaultValues: { priority: "1", pipeline_id: "" },
   });
+
+  const applyParsedJD = (data: ParsedJD) => {
+    if (data.title) setValue("title", data.title);
+    if (data.role_title) setValue("role_title", data.role_title);
+    if (data.role_description) setValue("role_description", data.role_description);
+    if (data.ideal_candidate_profile) setValue("ideal_candidate_profile", data.ideal_candidate_profile);
+    setJdSuccess(true);
+    setTimeout(() => setJdSuccess(false), 5000);
+  };
+
+  const parseJDFile = async (file: File) => {
+    setJdParsing(true);
+    setJdError("");
+    setJdSuccess(false);
+    try {
+      const api = getApiClient();
+      const formData = new FormData();
+      formData.append("file", file);
+      const { data } = await api.post("/api/ai/parse-jd", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+        timeout: 30000,
+      });
+      applyParsedJD(data);
+    } catch (err: any) {
+      setJdError(err.response?.data?.error || "Failed to parse job description");
+    } finally {
+      setJdParsing(false);
+    }
+  };
+
+  const parseJDText = async () => {
+    if (!pasteText.trim()) return;
+    setJdParsing(true);
+    setJdError("");
+    setJdSuccess(false);
+    try {
+      const api = getApiClient();
+      const { data } = await api.post("/api/ai/parse-jd", { text: pasteText }, { timeout: 30000 });
+      applyParsedJD(data);
+      setPasteText("");
+    } catch (err: any) {
+      setJdError(err.response?.data?.error || "Failed to parse job description");
+    } finally {
+      setJdParsing(false);
+    }
+  };
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    const file = e.dataTransfer.files[0];
+    if (file) parseJDFile(file);
+  }, []);
 
   const onSubmit = async (data: CampaignInput) => {
     setError("");
     try {
-      const api = getApiClient();
       await api.post("/api/campaigns", {
         title: data.title,
         role_title: data.role_title,
@@ -45,6 +116,7 @@ export default function NewCampaignPage() {
         ideal_candidate_profile: data.ideal_candidate_profile || null,
         linkedin_search_url: data.linkedin_search_url || null,
         priority: parseInt(data.priority || "1", 10),
+        pipeline_id: data.pipeline_id || null,
       });
       router.push("/campaigns");
     } catch (err: unknown) {
@@ -57,6 +129,77 @@ export default function NewCampaignPage() {
     <div className="max-w-2xl mx-auto space-y-6">
       <h1 className="text-3xl font-bold text-gray-900">New Campaign</h1>
 
+      {/* JD Upload Section */}
+      <div className="bg-white rounded-lg shadow p-6 space-y-4">
+        <h2 className="text-lg font-semibold text-gray-900">Auto-Fill from Job Description</h2>
+        <p className="text-sm text-gray-500">
+          Upload a PDF, DOCX, or TXT file, or paste the JD text below. AI will extract the key fields.
+        </p>
+
+        <div
+          className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+            dragActive ? "border-blue-500 bg-blue-50" : "border-gray-300"
+          }`}
+          onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={handleDrop}
+        >
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".pdf,.docx,.txt"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) parseJDFile(f); }}
+            className="hidden"
+          />
+          <p className="text-sm text-gray-500 mb-2">
+            {dragActive ? "Drop file here" : "Drag & drop a file here, or"}
+          </p>
+          {!dragActive && (
+            <Button variant="outline" size="sm" onClick={() => fileRef.current?.click()} disabled={jdParsing}>
+              Choose File
+            </Button>
+          )}
+        </div>
+
+        <div className="relative">
+          <Textarea
+            rows={3}
+            placeholder="Or paste job description text here..."
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            disabled={jdParsing}
+          />
+          {pasteText.trim() && (
+            <Button
+              size="sm"
+              className="absolute bottom-2 right-2"
+              onClick={parseJDText}
+              disabled={jdParsing}
+            >
+              {jdParsing ? "Parsing..." : "Parse Text"}
+            </Button>
+          )}
+        </div>
+
+        {jdParsing && (
+          <div className="flex items-center gap-2 text-sm text-blue-600">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+            Analyzing job description with AI...
+          </div>
+        )}
+        {jdSuccess && (
+          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded text-sm">
+            Fields auto-filled successfully. Review and edit below before submitting.
+          </div>
+        )}
+        {jdError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded text-sm">
+            {jdError}
+          </div>
+        )}
+      </div>
+
+      {/* Campaign Form */}
       <form onSubmit={handleSubmit(onSubmit)} className="bg-white rounded-lg shadow p-6 space-y-4">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">
@@ -97,6 +240,21 @@ export default function NewCampaignPage() {
           <label className="block text-sm font-medium text-gray-700">Priority</label>
           <Input type="number" min={1} max={10} className="mt-1 w-24" {...register("priority")} />
           {errors.priority && <p className="mt-1 text-sm text-red-600">{errors.priority.message}</p>}
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700">Pipeline</label>
+          <Select className="mt-1" {...register("pipeline_id")}>
+            <option value="">
+              {defaultPipeline ? `Default (${defaultPipeline.name})` : "None"}
+            </option>
+            {(pipelines || []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}{p.is_default ? " (Default)" : ""}
+              </option>
+            ))}
+          </Select>
+          <p className="mt-1 text-xs text-gray-400">Leave empty to use the default pipeline</p>
         </div>
 
         <div className="flex gap-3 pt-4">

@@ -2,6 +2,10 @@ import express, { Request, Response } from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import { Pool } from "pg";
+import multer from "multer";
+import Anthropic from "@anthropic-ai/sdk";
+import pdfParse from "pdf-parse";
+import mammoth from "mammoth";
 import { sendApprovalNotification } from "./telegram-notifier";
 import {
   requireAuth,
@@ -19,10 +23,15 @@ import { encrypt, decrypt } from "./services/encryption";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "";
 
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+});
+
 export function createApiServer(db: Pool) {
   const app = express();
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: "1mb" }));
 
   // ============================================================
   // AUTH ENDPOINTS (unauthenticated)
@@ -158,6 +167,104 @@ export function createApiServer(db: Pool) {
   app.use("/api/settings", requireAuth);
   app.use("/api/templates", requireAuth);
   app.use("/api/admin", requireAuth, requireAdmin);
+  app.use("/api/ai", requireAuth);
+  app.use("/api/pipelines", requireAuth);
+
+  // ============================================================
+  // AI ENDPOINTS
+  // ============================================================
+
+  // POST /api/ai/parse-jd — extract structured data from a job description
+  app.post("/api/ai/parse-jd", upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      let text = "";
+
+      if (req.file) {
+        const mime = req.file.mimetype;
+        const ext = req.file.originalname.split(".").pop()?.toLowerCase();
+
+        if (mime === "application/pdf" || ext === "pdf") {
+          const parsed = await pdfParse(req.file.buffer);
+          text = parsed.text;
+        } else if (
+          mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+          ext === "docx"
+        ) {
+          const result = await mammoth.extractRawText({ buffer: req.file.buffer });
+          text = result.value;
+        } else if (mime === "text/plain" || ext === "txt") {
+          text = req.file.buffer.toString("utf-8");
+        } else {
+          res.status(400).json({ error: "Unsupported file type. Use PDF, DOCX, or TXT." });
+          return;
+        }
+      } else if (req.body?.text) {
+        text = req.body.text;
+      } else {
+        res.status(400).json({ error: "Provide a file upload or { text } in the body" });
+        return;
+      }
+
+      // Cap at 8000 chars
+      text = text.slice(0, 8000).trim();
+      if (!text) {
+        res.status(400).json({ error: "Could not extract any text from the provided input" });
+        return;
+      }
+
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+        return;
+      }
+
+      const anthropic = new Anthropic({ apiKey });
+
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 1024,
+        messages: [
+          {
+            role: "user",
+            content: `Extract the following fields from this job description. Return ONLY valid JSON with these keys:
+- "title": a short campaign title (e.g. "Senior Backend Engineer - Acme")
+- "role_title": the job title
+- "role_description": a concise summary of the role (2-4 sentences)
+- "ideal_candidate_profile": what the ideal candidate looks like (skills, experience, traits)
+
+If a field is not clearly present, use an empty string.
+
+Job Description:
+${text}`,
+          },
+        ],
+      });
+
+      const content = message.content[0];
+      if (content.type !== "text") {
+        res.status(500).json({ error: "Unexpected AI response format" });
+        return;
+      }
+
+      // Extract JSON from response (handle markdown code blocks)
+      let jsonStr = content.text.trim();
+      const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[1].trim();
+      }
+
+      const parsed = JSON.parse(jsonStr);
+      res.json({
+        title: parsed.title || "",
+        role_title: parsed.role_title || "",
+        role_description: parsed.role_description || "",
+        ideal_candidate_profile: parsed.ideal_candidate_profile || "",
+      });
+    } catch (error) {
+      console.error("POST /api/ai/parse-jd error:", error);
+      res.status(500).json({ error: "Failed to parse job description" });
+    }
+  });
 
   // ============================================================
   // USER PROFILE ENDPOINTS
@@ -684,7 +791,31 @@ export function createApiServer(db: Pool) {
         return;
       }
 
-      res.status(201).json(result.rows[0]);
+      const candidate = result.rows[0];
+
+      // Initialize pipeline progress if campaign has a pipeline
+      if (campaign_id) {
+        const campaignResult = await db.query(
+          `SELECT pipeline_id FROM campaigns WHERE id = $1`,
+          [campaign_id]
+        );
+        if (campaignResult.rows.length > 0 && campaignResult.rows[0].pipeline_id) {
+          const stages = await db.query(
+            `SELECT id, stage_order FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY stage_order ASC`,
+            [campaignResult.rows[0].pipeline_id]
+          );
+          for (const stage of stages.rows) {
+            await db.query(
+              `INSERT INTO candidate_pipeline_progress (candidate_id, pipeline_stage_id, status, started_at)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (candidate_id, pipeline_stage_id) DO NOTHING`,
+              [candidate.id, stage.id, stage.stage_order === 1 ? "in_progress" : "pending", stage.stage_order === 1 ? new Date() : null]
+            );
+          }
+        }
+      }
+
+      res.status(201).json(candidate);
     } catch (error) {
       console.error("POST /api/candidates error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -935,13 +1066,24 @@ export function createApiServer(db: Pool) {
   // POST /api/campaigns — create campaign
   app.post("/api/campaigns", async (req: Request, res: Response) => {
     try {
-      const { title, role_title, role_description, ideal_candidate_profile, linkedin_search_url, priority } = req.body;
+      const { title, role_title, role_description, ideal_candidate_profile, linkedin_search_url, priority, pipeline_id } = req.body;
+
+      // If no pipeline_id provided, use the default pipeline
+      let resolvedPipelineId = pipeline_id || null;
+      if (!resolvedPipelineId) {
+        const defaultPipeline = await db.query(
+          `SELECT id FROM pipelines WHERE is_default = TRUE LIMIT 1`
+        );
+        if (defaultPipeline.rows.length > 0) {
+          resolvedPipelineId = defaultPipeline.rows[0].id;
+        }
+      }
 
       const result = await db.query(
-        `INSERT INTO campaigns (title, role_title, role_description, ideal_candidate_profile, linkedin_search_url, priority, created_by_user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO campaigns (title, role_title, role_description, ideal_candidate_profile, linkedin_search_url, priority, pipeline_id, created_by_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
-        [title, role_title, role_description, ideal_candidate_profile || null, linkedin_search_url || null, priority || 1, req.user!.userId]
+        [title, role_title, role_description, ideal_candidate_profile || null, linkedin_search_url || null, priority || 1, resolvedPipelineId, req.user!.userId]
       );
 
       // Auto-assign creator to the campaign
@@ -958,6 +1100,373 @@ export function createApiServer(db: Pool) {
       res.status(201).json(result.rows[0]);
     } catch (error) {
       console.error("POST /api/campaigns error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ============================================================
+  // PIPELINES (authenticated)
+  // ============================================================
+
+  // GET /api/pipelines — list all pipelines with stages
+  app.get("/api/pipelines", async (_req: Request, res: Response) => {
+    try {
+      const pipelines = await db.query(
+        `SELECT * FROM pipelines ORDER BY is_default DESC, name ASC`
+      );
+      const stages = await db.query(
+        `SELECT * FROM pipeline_stages ORDER BY pipeline_id, stage_order ASC`
+      );
+
+      const stagesByPipeline = new Map<string, any[]>();
+      for (const s of stages.rows) {
+        if (!stagesByPipeline.has(s.pipeline_id)) stagesByPipeline.set(s.pipeline_id, []);
+        stagesByPipeline.get(s.pipeline_id)!.push(s);
+      }
+
+      const result = pipelines.rows.map((p: any) => ({
+        ...p,
+        stages: stagesByPipeline.get(p.id) || [],
+      }));
+
+      res.json(result);
+    } catch (error) {
+      console.error("GET /api/pipelines error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/pipelines/:id — single pipeline with stages
+  app.get("/api/pipelines/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const pResult = await db.query(`SELECT * FROM pipelines WHERE id = $1`, [id]);
+      if (pResult.rows.length === 0) {
+        res.status(404).json({ error: "Pipeline not found" });
+        return;
+      }
+
+      const sResult = await db.query(
+        `SELECT * FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY stage_order ASC`,
+        [id]
+      );
+
+      res.json({ ...pResult.rows[0], stages: sResult.rows });
+    } catch (error) {
+      console.error("GET /api/pipelines/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/admin/pipelines — create pipeline with stages (transactional)
+  app.post("/api/admin/pipelines", async (req: Request, res: Response) => {
+    try {
+      const { name, description, is_default, stages } = req.body;
+      if (!name || !Array.isArray(stages) || stages.length === 0) {
+        res.status(400).json({ error: "name and stages[] are required" });
+        return;
+      }
+
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+
+        // If setting as default, unset others
+        if (is_default) {
+          await client.query(`UPDATE pipelines SET is_default = FALSE WHERE is_default = TRUE`);
+        }
+
+        const pResult = await client.query(
+          `INSERT INTO pipelines (name, description, is_default, created_by)
+           VALUES ($1, $2, $3, $4) RETURNING *`,
+          [name, description || null, is_default || false, req.user!.userId]
+        );
+        const pipeline = pResult.rows[0];
+
+        for (let i = 0; i < stages.length; i++) {
+          const s = stages[i];
+          await client.query(
+            `INSERT INTO pipeline_stages (pipeline_id, stage_order, name, action_type, delay_days, requires_approval, template_id, config)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [pipeline.id, i + 1, s.name, s.action_type, s.delay_days || 0, s.requires_approval ?? true, s.template_id || null, JSON.stringify(s.config || {})]
+          );
+        }
+
+        await client.query(
+          `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+          [req.user!.userId, "pipeline_created", `pipeline:${pipeline.id}`, JSON.stringify({ name })]
+        );
+
+        await client.query("COMMIT");
+
+        // Return full pipeline with stages
+        const sResult = await db.query(
+          `SELECT * FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY stage_order ASC`,
+          [pipeline.id]
+        );
+        res.status(201).json({ ...pipeline, stages: sResult.rows });
+      } catch (txErr) {
+        await client.query("ROLLBACK");
+        throw txErr;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error("POST /api/admin/pipelines error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/admin/pipelines/:id — update pipeline metadata
+  app.patch("/api/admin/pipelines/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { name, description, is_default } = req.body;
+
+      const setClauses: string[] = ["updated_at = NOW()"];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (name !== undefined) { setClauses.push(`name = $${idx++}`); values.push(name); }
+      if (description !== undefined) { setClauses.push(`description = $${idx++}`); values.push(description); }
+      if (is_default !== undefined) {
+        if (is_default) {
+          await db.query(`UPDATE pipelines SET is_default = FALSE WHERE is_default = TRUE`);
+        }
+        setClauses.push(`is_default = $${idx++}`);
+        values.push(is_default);
+      }
+
+      if (values.length === 0) {
+        res.status(400).json({ error: "No fields to update" });
+        return;
+      }
+
+      values.push(id);
+      const result = await db.query(
+        `UPDATE pipelines SET ${setClauses.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Pipeline not found" });
+        return;
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error("PATCH /api/admin/pipelines/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PUT /api/admin/pipelines/:id/stages — replace all stages
+  app.put("/api/admin/pipelines/:id/stages", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { stages } = req.body;
+
+      if (!Array.isArray(stages) || stages.length === 0) {
+        res.status(400).json({ error: "stages[] is required" });
+        return;
+      }
+
+      // Check pipeline exists
+      const pResult = await db.query(`SELECT id FROM pipelines WHERE id = $1`, [id]);
+      if (pResult.rows.length === 0) {
+        res.status(404).json({ error: "Pipeline not found" });
+        return;
+      }
+
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+
+        await client.query(`DELETE FROM pipeline_stages WHERE pipeline_id = $1`, [id]);
+
+        for (let i = 0; i < stages.length; i++) {
+          const s = stages[i];
+          await client.query(
+            `INSERT INTO pipeline_stages (pipeline_id, stage_order, name, action_type, delay_days, requires_approval, template_id, config)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [id, i + 1, s.name, s.action_type, s.delay_days || 0, s.requires_approval ?? true, s.template_id || null, JSON.stringify(s.config || {})]
+          );
+        }
+
+        await client.query(`UPDATE pipelines SET updated_at = NOW() WHERE id = $1`, [id]);
+
+        await client.query("COMMIT");
+
+        const sResult = await db.query(
+          `SELECT * FROM pipeline_stages WHERE pipeline_id = $1 ORDER BY stage_order ASC`,
+          [id]
+        );
+        res.json(sResult.rows);
+      } catch (txErr) {
+        await client.query("ROLLBACK");
+        throw txErr;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error("PUT /api/admin/pipelines/:id/stages error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // DELETE /api/admin/pipelines/:id — delete pipeline (409 if in use)
+  app.delete("/api/admin/pipelines/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const inUse = await db.query(
+        `SELECT COUNT(*) as count FROM campaigns WHERE pipeline_id = $1`,
+        [id]
+      );
+      if (parseInt(inUse.rows[0].count) > 0) {
+        res.status(409).json({ error: "Pipeline is in use by campaigns and cannot be deleted" });
+        return;
+      }
+
+      const result = await db.query(
+        `DELETE FROM pipelines WHERE id = $1 RETURNING id, name`,
+        [id]
+      );
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Pipeline not found" });
+        return;
+      }
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "pipeline_deleted", `pipeline:${id}`, JSON.stringify({ name: result.rows[0].name })]
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("DELETE /api/admin/pipelines/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/candidates/:id/pipeline-progress — progress for a candidate
+  app.get("/api/candidates/:id/pipeline-progress", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const result = await db.query(
+        `SELECT cpp.*, ps.name AS stage_name, ps.stage_order, ps.action_type
+         FROM candidate_pipeline_progress cpp
+         JOIN pipeline_stages ps ON cpp.pipeline_stage_id = ps.id
+         WHERE cpp.candidate_id = $1
+         ORDER BY ps.stage_order ASC`,
+        [id]
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("GET /api/candidates/:id/pipeline-progress error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/candidates/:id/pipeline-progress/:progressId — update stage status
+  app.patch("/api/candidates/:id/pipeline-progress/:progressId", async (req: Request, res: Response) => {
+    try {
+      const { progressId } = req.params;
+      const { status, metadata } = req.body;
+
+      const setClauses: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (status) {
+        setClauses.push(`status = $${idx++}`);
+        values.push(status);
+        if (status === "in_progress") {
+          setClauses.push(`started_at = COALESCE(started_at, NOW())`);
+        } else if (status === "completed" || status === "failed" || status === "skipped") {
+          setClauses.push(`completed_at = NOW()`);
+        }
+      }
+      if (metadata !== undefined) {
+        setClauses.push(`metadata = $${idx++}`);
+        values.push(JSON.stringify(metadata));
+      }
+
+      if (setClauses.length === 0) {
+        res.status(400).json({ error: "No fields to update" });
+        return;
+      }
+
+      values.push(progressId);
+      const result = await db.query(
+        `UPDATE candidate_pipeline_progress SET ${setClauses.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Progress record not found" });
+        return;
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error("PATCH /api/candidates/:id/pipeline-progress/:progressId error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/candidates/:id/advance-pipeline — move candidate to next stage
+  app.post("/api/candidates/:id/advance-pipeline", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      // Find current in_progress stage
+      const currentResult = await db.query(
+        `SELECT cpp.*, ps.stage_order, ps.pipeline_id
+         FROM candidate_pipeline_progress cpp
+         JOIN pipeline_stages ps ON cpp.pipeline_stage_id = ps.id
+         WHERE cpp.candidate_id = $1 AND cpp.status = 'in_progress'
+         ORDER BY ps.stage_order ASC
+         LIMIT 1`,
+        [id]
+      );
+
+      if (currentResult.rows.length === 0) {
+        res.status(400).json({ error: "No in_progress stage found for this candidate" });
+        return;
+      }
+
+      const current = currentResult.rows[0];
+
+      // Complete current stage
+      await db.query(
+        `UPDATE candidate_pipeline_progress SET status = 'completed', completed_at = NOW()
+         WHERE id = $1`,
+        [current.id]
+      );
+
+      // Find next stage
+      const nextResult = await db.query(
+        `SELECT cpp.id AS progress_id, ps.name AS stage_name
+         FROM candidate_pipeline_progress cpp
+         JOIN pipeline_stages ps ON cpp.pipeline_stage_id = ps.id
+         WHERE cpp.candidate_id = $1 AND ps.pipeline_id = $2 AND ps.stage_order = $3 AND cpp.status = 'pending'
+         LIMIT 1`,
+        [id, current.pipeline_id, current.stage_order + 1]
+      );
+
+      if (nextResult.rows.length > 0) {
+        await db.query(
+          `UPDATE candidate_pipeline_progress SET status = 'in_progress', started_at = NOW()
+           WHERE id = $1`,
+          [nextResult.rows[0].progress_id]
+        );
+        res.json({ advanced: true, next_stage: nextResult.rows[0].stage_name });
+      } else {
+        res.json({ advanced: false, message: "Pipeline complete" });
+      }
+    } catch (error) {
+      console.error("POST /api/candidates/:id/advance-pipeline error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -1225,6 +1734,83 @@ export function createApiServer(db: Pool) {
       });
     } catch (error) {
       console.error("GET /api/admin/stats error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PUT /api/admin/settings — update settings (transactional)
+  app.put("/api/admin/settings", async (req: Request, res: Response) => {
+    try {
+      const data = req.body;
+      if (!data || typeof data !== "object") {
+        res.status(400).json({ error: "Settings object required" });
+        return;
+      }
+
+      // Split flat settings into DB rows
+      const rateLimitKeys = [
+        "daily_connection_requests", "daily_messages", "weekly_connection_cap",
+        "min_delay_seconds", "max_delay_seconds",
+      ];
+      const workingHoursKeys = [
+        "working_hours_start", "working_hours_end", "timezone", "pause_weekends",
+      ];
+      const aiKeys = ["model", "temperature", "max_tokens"];
+      const connectionKeys = [
+        "wait_after_acceptance_hours", "include_note_with_request",
+        "max_follow_ups", "follow_up_delay_days",
+      ];
+
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+
+        // Helper to merge incoming keys into existing settings row
+        const mergeSettings = async (key: string, allowedKeys: string[]) => {
+          const incoming: Record<string, any> = {};
+          let hasKeys = false;
+          for (const k of allowedKeys) {
+            if (k in data) {
+              incoming[k] = data[k];
+              hasKeys = true;
+            }
+          }
+          if (!hasKeys) return;
+
+          const existing = await client.query(
+            `SELECT value FROM settings WHERE key = $1`,
+            [key]
+          );
+          const current = existing.rows.length > 0 ? existing.rows[0].value : {};
+          const merged = { ...current, ...incoming };
+
+          await client.query(
+            `INSERT INTO settings (key, value) VALUES ($1, $2)
+             ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+            [key, JSON.stringify(merged)]
+          );
+        };
+
+        await mergeSettings("global_rate_limits", [...rateLimitKeys, ...workingHoursKeys]);
+        await mergeSettings("ai_settings", aiKeys);
+        await mergeSettings("connection_strategy", connectionKeys);
+
+        // Audit log
+        await client.query(
+          `INSERT INTO audit_logs (user_id, action, details) VALUES ($1, $2, $3)`,
+          [req.user!.userId, "settings_updated", JSON.stringify(data)]
+        );
+
+        await client.query("COMMIT");
+        res.json({ success: true });
+      } catch (txErr) {
+        await client.query("ROLLBACK");
+        throw txErr;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error("PUT /api/admin/settings error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

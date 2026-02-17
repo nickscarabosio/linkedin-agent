@@ -11,4 +11,7 @@ export type {
   GenerateMessageResponse,
   User,
   AuditLog,
+  Pipeline,
+  PipelineStage,
+  CandidatePipelineProgress,
 } from "./types";

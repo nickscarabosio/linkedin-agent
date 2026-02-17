@@ -112,6 +112,40 @@ export interface AuditLog {
   created_at: Date;
 }
 
+// Pipeline types
+export interface Pipeline {
+  id: string;
+  name: string;
+  description: string | null;
+  is_default: boolean;
+  created_by: string | null;
+  created_at: Date;
+  updated_at: Date;
+  stages?: PipelineStage[];
+}
+
+export interface PipelineStage {
+  id: string;
+  pipeline_id: string;
+  stage_order: number;
+  name: string;
+  action_type: "connection_request" | "message" | "follow_up" | "wait" | "reminder";
+  delay_days: number;
+  requires_approval: boolean;
+  template_id: string | null;
+  config: Record<string, any>;
+}
+
+export interface CandidatePipelineProgress {
+  id: string;
+  candidate_id: string;
+  pipeline_stage_id: string;
+  status: "pending" | "in_progress" | "completed" | "skipped" | "failed";
+  started_at: Date | null;
+  completed_at: Date | null;
+  metadata: Record<string, any>;
+}
+
 // Claude message types
 export interface GenerateMessageRequest {
   candidate: Candidate;

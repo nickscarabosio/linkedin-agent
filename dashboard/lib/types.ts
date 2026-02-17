@@ -17,6 +17,7 @@ export interface Campaign {
   role_description: string;
   ideal_candidate_profile: string | null;
   linkedin_search_url: string | null;
+  pipeline_id: string | null;
   status: "active" | "paused" | "completed";
   priority: number;
   created_at: string;
@@ -85,6 +86,48 @@ export interface MessageTemplate {
   body: string;
   created_by: string | null;
   created_at: string;
+}
+
+export interface Pipeline {
+  id: string;
+  name: string;
+  description: string | null;
+  is_default: boolean;
+  created_by: string | null;
+  created_at: string;
+  stages?: PipelineStage[];
+}
+
+export interface PipelineStage {
+  id: string;
+  pipeline_id: string;
+  stage_order: number;
+  name: string;
+  action_type: "connection_request" | "message" | "follow_up" | "wait" | "reminder";
+  delay_days: number;
+  requires_approval: boolean;
+  template_id: string | null;
+  config: Record<string, unknown>;
+}
+
+export interface CandidatePipelineProgress {
+  id: string;
+  candidate_id: string;
+  pipeline_stage_id: string;
+  status: "pending" | "in_progress" | "completed" | "skipped" | "failed";
+  started_at: string | null;
+  completed_at: string | null;
+  metadata: Record<string, unknown>;
+  stage_name?: string;
+  stage_order?: number;
+  action_type?: string;
+}
+
+export interface ParsedJD {
+  title: string;
+  role_title: string;
+  role_description: string;
+  ideal_candidate_profile: string;
 }
 
 export interface Settings {

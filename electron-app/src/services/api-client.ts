@@ -17,6 +17,7 @@ interface Campaign {
   role_description: string;
   ideal_candidate_profile: string;
   linkedin_search_url: string;
+  pipeline_id: string | null;
   priority: number;
   status: string;
 }
@@ -223,6 +224,54 @@ export class ApiClient {
       return response.data;
     } catch (error) {
       console.error("Error creating candidate:", error);
+      return null;
+    }
+  }
+
+  async getPipelineProgress(candidateId: string): Promise<any[]> {
+    try {
+      const response = await this.client.get(`/api/candidates/${candidateId}/pipeline-progress`);
+      return response.data;
+    } catch (error) {
+      console.error("Error getting pipeline progress:", error);
+      return [];
+    }
+  }
+
+  async updatePipelineProgress(candidateId: string, progressId: string, update: { status: string; metadata?: Record<string, any> }): Promise<void> {
+    try {
+      await this.client.patch(`/api/candidates/${candidateId}/pipeline-progress/${progressId}`, update);
+    } catch (error) {
+      console.error("Error updating pipeline progress:", error);
+    }
+  }
+
+  async advancePipeline(candidateId: string): Promise<{ advanced: boolean; next_stage?: string; message?: string }> {
+    try {
+      const response = await this.client.post(`/api/candidates/${candidateId}/advance-pipeline`);
+      return response.data;
+    } catch (error) {
+      console.error("Error advancing pipeline:", error);
+      return { advanced: false };
+    }
+  }
+
+  async getCampaignById(campaignId: string): Promise<Campaign | null> {
+    try {
+      const response = await this.client.get(`/api/campaigns/${campaignId}`);
+      return response.data;
+    } catch (error) {
+      console.error("Error getting campaign:", error);
+      return null;
+    }
+  }
+
+  async getPipeline(pipelineId: string): Promise<any | null> {
+    try {
+      const response = await this.client.get(`/api/pipelines/${pipelineId}`);
+      return response.data;
+    } catch (error) {
+      console.error("Error getting pipeline:", error);
       return null;
     }
   }

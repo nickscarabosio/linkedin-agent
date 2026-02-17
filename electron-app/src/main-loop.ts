@@ -40,10 +40,13 @@ export class MainLoop {
         // 3. Discover new candidates from LinkedIn search
         await this.discoverCandidates();
 
-        // 4. Generate messages for qualified candidates and submit for approval
+        // 4. Process pipeline actions for pipeline-enabled campaigns
+        await this.processPipelineActions();
+
+        // 5. Generate messages for qualified candidates (fallback for non-pipeline campaigns)
         await this.findAndContactCandidates();
 
-        // 5. Check for responses (stub)
+        // 6. Check for responses (stub)
         await this.checkForResponses();
 
         // Sleep before next iteration
@@ -93,6 +96,16 @@ export class MainLoop {
             action_type: approval.approval_type === "connection_request" ? "connection_request_sent" : "message_sent",
             success: true,
           });
+
+          // If this approval has a pipeline stage, complete it and advance
+          if (approval.pipeline_stage_id) {
+            const progress = await this.api.getPipelineProgress(approval.candidate_id);
+            const stageProgress = progress.find((p: any) => p.pipeline_stage_id === approval.pipeline_stage_id);
+            if (stageProgress) {
+              await this.api.advancePipeline(approval.candidate_id);
+              console.log(`📊 Advanced pipeline for ${approval.candidate_name}`);
+            }
+          }
 
           console.log(
             `✅ Sent ${approval.approval_type} to ${approval.candidate_name}`
@@ -169,7 +182,116 @@ export class MainLoop {
     }
   }
 
-  /** Generate messages for qualified candidates and create approval requests */
+  /** Process pipeline-driven actions for candidates with active pipelines */
+  private async processPipelineActions() {
+    try {
+      console.log("🔄 Processing pipeline actions...");
+
+      const campaigns = await this.api.getActiveCampaigns();
+      const pipelineCampaigns = campaigns.filter((c: any) => c.pipeline_id);
+
+      if (pipelineCampaigns.length === 0) {
+        console.log("📋 No pipeline campaigns");
+        return;
+      }
+
+      for (const campaign of pipelineCampaigns) {
+        const pipeline = await this.api.getPipeline(campaign.pipeline_id!);
+        if (!pipeline || !pipeline.stages) continue;
+
+        // Get candidates with in_progress pipeline stages
+        const candidates = await this.api.getQualifiedCandidates();
+        const campaignCandidates = candidates.filter((c: any) => c.campaign_id === campaign.id);
+
+        for (const candidate of campaignCandidates.slice(0, 3)) {
+          try {
+            const progress = await this.api.getPipelineProgress(candidate.id);
+            const currentStage = progress.find((p: any) => p.status === "in_progress");
+            if (!currentStage) continue;
+
+            const stageDefinition = pipeline.stages.find((s: any) => s.id === currentStage.pipeline_stage_id);
+            if (!stageDefinition) continue;
+
+            // Check if delay has passed
+            if (stageDefinition.delay_days > 0 && currentStage.started_at) {
+              const startedAt = new Date(currentStage.started_at);
+              const delayMs = stageDefinition.delay_days * 24 * 60 * 60 * 1000;
+              if (Date.now() - startedAt.getTime() < delayMs) {
+                continue; // Still waiting
+              }
+            }
+
+            await this.handlePipelineStage(candidate, campaign, stageDefinition, currentStage);
+          } catch (error) {
+            console.error(`❌ Pipeline error for candidate ${candidate.id}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error processing pipeline actions:", error);
+    }
+  }
+
+  /** Handle a specific pipeline stage action */
+  private async handlePipelineStage(candidate: any, campaign: any, stage: any, progress: any) {
+    const canContact = await this.api.checkRateLimits("connection_request");
+
+    switch (stage.action_type) {
+      case "connection_request": {
+        if (!canContact) return;
+        const { message, reasoning } = await this.claude.generateMessage(
+          candidate,
+          { role_title: campaign.role_title, role_description: campaign.role_description, ideal_candidate_profile: campaign.ideal_candidate_profile }
+        );
+        await this.api.createApprovalRequest({
+          candidate_id: candidate.id,
+          campaign_id: campaign.id,
+          proposed_text: message,
+          context: reasoning,
+          reasoning,
+          approval_type: "connection_request",
+        });
+        console.log(`📝 [Pipeline] Created connection_request approval for ${candidate.name}`);
+        break;
+      }
+
+      case "wait": {
+        // Check if connection was accepted by looking at LinkedIn
+        // For now, auto-advance after delay
+        await this.api.advancePipeline(candidate.id);
+        console.log(`⏳ [Pipeline] Wait stage complete for ${candidate.name}, advancing`);
+        break;
+      }
+
+      case "message":
+      case "follow_up": {
+        if (!canContact) return;
+        const { message, reasoning } = await this.claude.generateMessage(
+          candidate,
+          { role_title: campaign.role_title, role_description: campaign.role_description, ideal_candidate_profile: campaign.ideal_candidate_profile }
+        );
+        await this.api.createApprovalRequest({
+          candidate_id: candidate.id,
+          campaign_id: campaign.id,
+          proposed_text: message,
+          context: reasoning,
+          reasoning,
+          approval_type: "message",
+        });
+        console.log(`📝 [Pipeline] Created ${stage.action_type} approval for ${candidate.name}`);
+        break;
+      }
+
+      case "reminder": {
+        // Create a note as reminder — no approval needed
+        await this.api.advancePipeline(candidate.id);
+        console.log(`🔔 [Pipeline] Reminder stage for ${candidate.name}, advancing`);
+        break;
+      }
+    }
+  }
+
+  /** Generate messages for qualified candidates and create approval requests (non-pipeline fallback) */
   private async findAndContactCandidates() {
     try {
       console.log("🔍 Finding qualified candidates to contact...");
@@ -187,12 +309,22 @@ export class MainLoop {
         return;
       }
 
-      // Load campaigns for context
+      // Load campaigns for context — filter out pipeline campaigns (handled by processPipelineActions)
       const campaigns = await this.api.getActiveCampaigns();
-      const campaignMap = new Map(campaigns.map((c) => [c.id, c]));
+      const nonPipelineCampaignIds = new Set(
+        campaigns.filter((c: any) => !c.pipeline_id).map((c: any) => c.id)
+      );
+      const campaignMap = new Map(campaigns.map((c: any) => [c.id, c]));
+
+      const eligibleCandidates = candidates.filter((c: any) => nonPipelineCampaignIds.has(c.campaign_id));
+
+      if (eligibleCandidates.length === 0) {
+        console.log("✅ No non-pipeline candidates to contact");
+        return;
+      }
 
       // Process up to 5 candidates per cycle
-      for (const candidate of candidates.slice(0, 5)) {
+      for (const candidate of eligibleCandidates.slice(0, 5)) {
         try {
           const campaign = campaignMap.get(candidate.campaign_id);
 

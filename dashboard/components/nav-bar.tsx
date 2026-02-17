@@ -22,6 +22,7 @@ const outreachLinks: NavLink[] = [
 const adminLinks: NavLink[] = [
   { href: "/admin/users", label: "Users" },
   { href: "/admin/templates", label: "Templates" },
+  { href: "/admin/pipelines", label: "Pipelines" },
   { href: "/admin/audit-log", label: "Audit Log" },
   { href: "/admin/settings", label: "Settings" },
 ];
