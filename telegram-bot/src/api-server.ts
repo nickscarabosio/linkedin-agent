@@ -268,6 +268,59 @@ ${text}`,
     }
   });
 
+  // POST /api/ai/generate-search-url — generate LinkedIn search URL from campaign fields
+  app.post("/api/ai/generate-search-url", async (req: Request, res: Response) => {
+    try {
+      const { role_title, role_description, ideal_candidate_profile } = req.body;
+
+      if (!role_title) {
+        res.status(400).json({ error: "role_title is required" });
+        return;
+      }
+
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        res.status(500).json({ error: "ANTHROPIC_API_KEY not configured" });
+        return;
+      }
+
+      const anthropic = new Anthropic({ apiKey });
+
+      const message = await anthropic.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 256,
+        messages: [
+          {
+            role: "user",
+            content: `Generate a LinkedIn People Search URL to find candidates for this role. Return ONLY the URL, nothing else.
+
+Build it using: https://www.linkedin.com/search/results/people/?keywords=KEYWORDS&origin=GLOBAL_SEARCH_HEADER
+where KEYWORDS are URL-encoded search terms (3-5 keywords max) combining the role title and key skills a candidate would have in their headline.
+
+Role Title: ${role_title}
+${role_description ? `Role Description: ${role_description}` : ""}
+${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`,
+          },
+        ],
+      });
+
+      const content = message.content[0];
+      if (content.type !== "text") {
+        res.status(500).json({ error: "Unexpected AI response format" });
+        return;
+      }
+
+      // Extract URL from response
+      const urlMatch = content.text.trim().match(/https:\/\/www\.linkedin\.com\/search\/results\/people\/[^\s"'<>]+/);
+      const url = urlMatch ? urlMatch[0] : content.text.trim();
+
+      res.json({ linkedin_search_url: url });
+    } catch (error) {
+      console.error("POST /api/ai/generate-search-url error:", error);
+      res.status(500).json({ error: "Failed to generate search URL" });
+    }
+  });
+
   // ============================================================
   // USER PROFILE ENDPOINTS
   // ============================================================
@@ -1005,7 +1058,7 @@ ${text}`,
   app.patch("/api/campaigns/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { status, title, priority } = req.body;
+      const { status, title, priority, linkedin_search_url } = req.body;
       const isAdmin = req.user!.role === "admin";
 
       // Ownership check: user must be assigned to campaign or be admin
@@ -1036,6 +1089,10 @@ ${text}`,
         setClauses.push(`priority = $${idx++}`);
         values.push(priority);
       }
+      if (linkedin_search_url !== undefined) {
+        setClauses.push(`linkedin_search_url = $${idx++}`);
+        values.push(linkedin_search_url || null);
+      }
 
       if (setClauses.length === 0) {
         res.status(400).json({ error: "No fields to update" });
@@ -1055,7 +1112,7 @@ ${text}`,
 
       await db.query(
         `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
-        [req.user!.userId, "campaign_updated", `campaign:${id}`, JSON.stringify({ status, title, priority })]
+        [req.user!.userId, "campaign_updated", `campaign:${id}`, JSON.stringify({ status, title, priority, linkedin_search_url })]
       );
 
       res.json(result.rows[0]);

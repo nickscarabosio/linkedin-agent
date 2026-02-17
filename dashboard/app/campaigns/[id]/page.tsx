@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useParams } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +17,9 @@ type ActionPanel = "add" | "csv" | null;
 export default function CampaignDetailPage() {
   const { id } = useParams();
   const api = getApiClient();
+  const queryClient = useQueryClient();
   const [actionPanel, setActionPanel] = useState<ActionPanel>(null);
+  const [generatingUrl, setGeneratingUrl] = useState(false);
 
   const { data: campaign, isLoading } = useQuery<Campaign>({
     queryKey: ["campaign", id],
@@ -51,6 +53,26 @@ export default function CampaignDetailPage() {
     };
     fetchProgress();
   }, [candidates, campaign?.pipeline_id]);
+
+  const generateSearchUrl = async () => {
+    if (!campaign) return;
+    setGeneratingUrl(true);
+    try {
+      const { data } = await api.post("/api/ai/generate-search-url", {
+        role_title: campaign.role_title,
+        role_description: campaign.role_description,
+        ideal_candidate_profile: campaign.ideal_candidate_profile,
+      }, { timeout: 30000 });
+      if (data.linkedin_search_url) {
+        await api.patch(`/api/campaigns/${id}`, { linkedin_search_url: data.linkedin_search_url });
+        queryClient.invalidateQueries({ queryKey: ["campaign", id] });
+      }
+    } catch {
+      // silently fail — user can retry
+    } finally {
+      setGeneratingUrl(false);
+    }
+  };
 
   if (isLoading) return <div className="text-gray-500">Loading...</div>;
   if (!campaign) return <div className="text-red-500">Campaign not found</div>;
@@ -89,16 +111,41 @@ export default function CampaignDetailPage() {
                 <dd className="text-sm text-gray-900 mt-1">{campaign.ideal_candidate_profile}</dd>
               </div>
             )}
-            {campaign.linkedin_search_url && (
-              <div>
-                <dt className="text-sm text-gray-500">Search URL</dt>
-                <dd className="text-sm text-blue-600 mt-1 break-all">
-                  <a href={campaign.linkedin_search_url} target="_blank" rel="noopener noreferrer">
-                    {campaign.linkedin_search_url.slice(0, 80)}...
+            <div>
+              <dt className="text-sm text-gray-500">Search URL</dt>
+              {campaign.linkedin_search_url ? (
+                <dd className="text-sm mt-1 space-y-1">
+                  <a href={campaign.linkedin_search_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 break-all hover:underline">
+                    {campaign.linkedin_search_url.length > 80
+                      ? campaign.linkedin_search_url.slice(0, 80) + "..."
+                      : campaign.linkedin_search_url}
                   </a>
+                  <div>
+                    <button
+                      onClick={generateSearchUrl}
+                      disabled={generatingUrl}
+                      className="text-xs text-gray-400 hover:text-blue-600 transition-colors"
+                    >
+                      {generatingUrl ? "Regenerating..." : "Regenerate with AI"}
+                    </button>
+                  </div>
                 </dd>
-              </div>
-            )}
+              ) : (
+                <dd className="mt-1">
+                  <Button size="sm" variant="outline" onClick={generateSearchUrl} disabled={generatingUrl}>
+                    {generatingUrl ? (
+                      <span className="flex items-center gap-2">
+                        <span className="h-3 w-3 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+                        Generating...
+                      </span>
+                    ) : (
+                      "Generate Search URL with AI"
+                    )}
+                  </Button>
+                  <p className="text-xs text-gray-400 mt-1">AI will create a LinkedIn search based on this campaign&apos;s role details.</p>
+                </dd>
+              )}
+            </div>
           </dl>
         </div>
 
