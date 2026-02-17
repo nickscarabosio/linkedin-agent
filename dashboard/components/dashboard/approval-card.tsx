@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, HelpCircle, X, ChevronRight } from "lucide-react";
+import { Check, HelpCircle, X, ChevronRight, ExternalLink, Briefcase, Building2, MessageSquare } from "lucide-react";
 import { getApiClient } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
@@ -95,16 +95,58 @@ export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: A
 
       {/* Expanded details */}
       {expanded && (
-        <div className="px-4 pb-4 pt-1 border-t border-gray-100">
-          <div className="flex items-center gap-2 mb-2">
+        <div className="px-4 pb-4 pt-1 border-t border-gray-100 space-y-3">
+          {/* Candidate profile */}
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1.5">
+              <p className="font-semibold text-gray-900">{approval.candidate_name}</p>
+              {approval.candidate_title && (
+                <div className="flex items-center gap-1.5 text-sm text-gray-600">
+                  <Briefcase className="h-3.5 w-3.5 shrink-0" />
+                  <span>{approval.candidate_title}</span>
+                </div>
+              )}
+              {approval.candidate_company && (
+                <div className="flex items-center gap-1.5 text-sm text-gray-600">
+                  <Building2 className="h-3.5 w-3.5 shrink-0" />
+                  <span>{approval.candidate_company}</span>
+                </div>
+              )}
+            </div>
+            {approval.linkedin_url && (
+              <a
+                href={approval.linkedin_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 px-3 py-1.5 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors shrink-0"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                LinkedIn
+              </a>
+            )}
+          </div>
+
+          {/* Type + reasoning */}
+          <div className="flex items-center gap-2">
             <Badge variant="info">{approval.approval_type}</Badge>
           </div>
-          <div className="bg-gray-50 rounded-md p-3 text-sm text-gray-700 whitespace-pre-wrap">
-            {approval.proposed_text}
-          </div>
-          {approval.context && (
-            <p className="mt-2 text-xs text-gray-500">{approval.context}</p>
+          {(approval.reasoning || approval.context) && (
+            <div className="text-sm text-gray-600 bg-gray-50 rounded-md p-3">
+              <p className="font-medium text-gray-700 mb-1">Why this candidate</p>
+              <p>{approval.reasoning || approval.context}</p>
+            </div>
           )}
+
+          {/* Proposed message */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <MessageSquare className="h-3.5 w-3.5 text-gray-500" />
+              <p className="text-sm font-medium text-gray-700">Proposed message</p>
+            </div>
+            <div className="bg-gray-50 rounded-md p-3 text-sm text-gray-700 whitespace-pre-wrap">
+              {approval.proposed_text}
+            </div>
+          </div>
         </div>
       )}
     </div>

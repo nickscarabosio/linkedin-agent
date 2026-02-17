@@ -41,9 +41,11 @@ export interface Approval {
   candidate_name: string;
   candidate_title: string;
   candidate_company: string;
+  linkedin_url: string;
   approval_type: string;
   proposed_text: string;
   context: string | null;
+  reasoning: string | null;
   status: "pending" | "approved" | "rejected" | "sent" | "failed";
   created_at: string;
   responded_at: string | null;
