@@ -685,6 +685,70 @@ export function createApiServer(db: Pool) {
     }
   });
 
+  // PATCH /api/campaigns/:id — update campaign (status, title, priority)
+  app.patch("/api/campaigns/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { status, title, priority } = req.body;
+      const isAdmin = req.user!.role === "admin";
+
+      // Ownership check: user must be assigned to campaign or be admin
+      if (!isAdmin) {
+        const assignment = await db.query(
+          `SELECT 1 FROM user_campaign_assignments WHERE user_id = $1 AND campaign_id = $2`,
+          [req.user!.userId, id]
+        );
+        if (assignment.rows.length === 0) {
+          res.status(403).json({ error: "Not assigned to this campaign" });
+          return;
+        }
+      }
+
+      const setClauses: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (status) {
+        setClauses.push(`status = $${idx++}`);
+        values.push(status);
+      }
+      if (title) {
+        setClauses.push(`title = $${idx++}`);
+        values.push(title);
+      }
+      if (priority !== undefined) {
+        setClauses.push(`priority = $${idx++}`);
+        values.push(priority);
+      }
+
+      if (setClauses.length === 0) {
+        res.status(400).json({ error: "No fields to update" });
+        return;
+      }
+
+      values.push(id);
+      const result = await db.query(
+        `UPDATE campaigns SET ${setClauses.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Campaign not found" });
+        return;
+      }
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "campaign_updated", `campaign:${id}`, JSON.stringify({ status, title, priority })]
+      );
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error("PATCH /api/campaigns/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // POST /api/campaigns — create campaign
   app.post("/api/campaigns", async (req: Request, res: Response) => {
     try {
