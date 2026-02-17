@@ -203,6 +203,20 @@ export class ApiClient {
     }
   }
 
+  async updateCandidateStatus(
+    candidateId: string,
+    status: string
+  ): Promise<void> {
+    try {
+      await this.client.patch(`/api/candidates/${candidateId}`, {
+        status,
+        contacted_at: status === "contacted" ? new Date() : undefined,
+      });
+    } catch (error) {
+      console.error("Error updating candidate status:", error);
+    }
+  }
+
   async createCandidate(candidate: NewCandidate): Promise<Candidate | null> {
     try {
       const response = await this.client.post("/api/candidates", candidate);

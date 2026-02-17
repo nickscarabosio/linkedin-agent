@@ -425,6 +425,43 @@ export function createApiServer(db: Pool) {
     }
   });
 
+  // POST /api/approvals/batch - batch approve/reject
+  app.post("/api/approvals/batch", async (req: Request, res: Response) => {
+    try {
+      const { ids, status } = req.body;
+
+      if (!Array.isArray(ids) || ids.length === 0) {
+        res.status(400).json({ error: "ids must be a non-empty array" });
+        return;
+      }
+
+      if (status !== "approved" && status !== "rejected") {
+        res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
+        return;
+      }
+
+      let result;
+      if (status === "approved") {
+        result = await db.query(
+          `UPDATE approval_queue SET status = $1, responded_at = NOW(), approved_by_user_id = $2
+           WHERE id = ANY($3) AND status = 'pending' RETURNING *`,
+          [status, req.user!.userId, ids]
+        );
+      } else {
+        result = await db.query(
+          `UPDATE approval_queue SET status = $1
+           WHERE id = ANY($2) AND status = 'pending' RETURNING *`,
+          [status, ids]
+        );
+      }
+
+      res.json({ updated: result.rows.length });
+    } catch (error) {
+      console.error("POST /api/approvals/batch error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // POST /api/approvals - create approval + send Telegram notification
   app.post("/api/approvals", async (req: Request, res: Response) => {
     try {
@@ -571,6 +608,48 @@ export function createApiServer(db: Pool) {
       res.json(result.rows[0]);
     } catch (error) {
       console.error("GET /api/candidates/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/candidates/:id - update candidate status
+  app.patch("/api/candidates/:id", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { status, contacted_at } = req.body;
+
+      const setClauses: string[] = [];
+      const values: any[] = [];
+      let idx = 1;
+
+      if (status) {
+        setClauses.push(`status = $${idx++}`);
+        values.push(status);
+      }
+      if (contacted_at) {
+        setClauses.push(`contacted_at = $${idx++}`);
+        values.push(contacted_at);
+      }
+
+      if (setClauses.length === 0) {
+        res.status(400).json({ error: "No fields to update" });
+        return;
+      }
+
+      values.push(id);
+      const result = await db.query(
+        `UPDATE candidates SET ${setClauses.join(", ")} WHERE id = $${idx} RETURNING *`,
+        values
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Candidate not found" });
+        return;
+      }
+
+      res.json(result.rows[0]);
+    } catch (error) {
+      console.error("PATCH /api/candidates/:id error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

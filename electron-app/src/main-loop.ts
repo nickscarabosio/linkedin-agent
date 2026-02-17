@@ -85,6 +85,7 @@ export class MainLoop {
           }
 
           await this.api.markApprovalSent(approval.id);
+          await this.api.updateCandidateStatus(approval.candidate_id, "contacted");
 
           await this.api.logAction({
             candidate_id: approval.candidate_id,
