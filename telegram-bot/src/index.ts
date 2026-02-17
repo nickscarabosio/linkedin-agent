@@ -6,7 +6,9 @@ import { initNotifier } from "./telegram-notifier";
 
 dotenv.config();
 
-const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, { polling: true });
+const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, {
+  polling: { interval: 2000, params: { timeout: 10 } },
+});
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // Initialize the Telegram notifier with DB for dynamic recipient lookup
@@ -335,9 +337,13 @@ testConnection().then(() => {
   });
 });
 
-// Handle graceful shutdown
-process.on("SIGINT", async () => {
+// Handle graceful shutdown (SIGTERM from Railway, SIGINT from local)
+async function shutdown() {
   console.log("\n🛑 Shutting down bot...");
+  await bot.stopPolling();
   await db.end();
   process.exit(0);
-});
+}
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
