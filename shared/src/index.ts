@@ -9,4 +9,6 @@ export type {
   AISettings,
   GenerateMessageRequest,
   GenerateMessageResponse,
+  User,
+  AuditLog,
 } from "./types";

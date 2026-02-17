@@ -1,6 +1,7 @@
 import TelegramBot, { InlineKeyboardMarkup } from "node-telegram-bot-api";
+import { Pool } from "pg";
 
-interface ApprovalNotification {
+export interface ApprovalNotification {
   id: number;
   candidate_name: string;
   candidate_title: string;
@@ -9,19 +10,60 @@ interface ApprovalNotification {
   proposed_text: string;
   context: string;
   approval_type: string;
+  campaign_id?: number;
 }
 
 let botInstance: TelegramBot | null = null;
-let notifyChatIds: number[] = [];
+let dbPool: Pool | null = null;
 
-export function initNotifier(bot: TelegramBot, chatIds: number[]) {
+export function initNotifier(bot: TelegramBot, db: Pool) {
   botInstance = bot;
-  notifyChatIds = chatIds;
+  dbPool = db;
+}
+
+/**
+ * Look up who should receive a notification for a given campaign:
+ * - All admins with a linked telegram_chat_id
+ * - All users assigned to the campaign with a linked telegram_chat_id
+ */
+async function getNotificationRecipients(campaignId?: number): Promise<number[]> {
+  if (!dbPool) return [];
+
+  let query: string;
+  let params: any[];
+
+  if (campaignId) {
+    query = `
+      SELECT DISTINCT u.telegram_chat_id FROM users u
+      WHERE u.telegram_chat_id IS NOT NULL AND u.is_active = true
+        AND (
+          u.role = 'admin'
+          OR EXISTS (
+            SELECT 1 FROM user_campaign_assignments uca
+            WHERE uca.user_id = u.id AND uca.campaign_id = $1
+          )
+        )`;
+    params = [campaignId];
+  } else {
+    // No campaign context — notify all admins
+    query = `SELECT telegram_chat_id FROM users WHERE telegram_chat_id IS NOT NULL AND is_active = true AND role = 'admin'`;
+    params = [];
+  }
+
+  const result = await dbPool.query(query, params);
+  return result.rows.map((r) => Number(r.telegram_chat_id));
 }
 
 export async function sendApprovalNotification(approval: ApprovalNotification) {
   if (!botInstance) {
     throw new Error("Notifier not initialized. Call initNotifier first.");
+  }
+
+  const chatIds = await getNotificationRecipients(approval.campaign_id);
+
+  if (chatIds.length === 0) {
+    console.log("⚠️ No Telegram recipients found for this notification");
+    return;
   }
 
   const titleLine = [approval.candidate_title, approval.candidate_company]
@@ -47,13 +89,17 @@ export async function sendApprovalNotification(approval: ApprovalNotification) {
     ],
   };
 
-  for (const chatId of notifyChatIds) {
-    await botInstance.sendMessage(chatId, message, {
-      reply_markup: keyboard,
-    });
+  for (const chatId of chatIds) {
+    try {
+      await botInstance.sendMessage(chatId, message, {
+        reply_markup: keyboard,
+      });
+    } catch (err) {
+      console.error(`Failed to send notification to chat ${chatId}:`, err);
+    }
   }
 
   console.log(
-    `📨 Approval request sent to ${notifyChatIds.length} user(s) for ${approval.candidate_name}`
+    `📨 Approval request sent to ${chatIds.length} user(s) for ${approval.candidate_name}`
   );
 }

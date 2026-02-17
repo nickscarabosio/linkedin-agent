@@ -10,7 +10,10 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
-const COOKIE_PATH = path.join(os.homedir(), ".hood-hero", "linkedin-cookies.json");
+interface LinkedInCredentials {
+  username: string;
+  password: string;
+}
 
 interface ScrapedCandidate {
   name: string;
@@ -21,16 +24,23 @@ interface ScrapedCandidate {
 }
 
 export class LinkedInService {
-  constructor(private browser: BrowserController) {}
+  private cookiePath: string;
+  private credentials?: LinkedInCredentials;
+
+  constructor(private browser: BrowserController, credentials?: LinkedInCredentials, userId?: string) {
+    this.credentials = credentials;
+    const cookieSuffix = userId ? `linkedin-cookies-${userId}.json` : "linkedin-cookies.json";
+    this.cookiePath = path.join(os.homedir(), ".hood-hero", cookieSuffix);
+  }
 
   /** Log in to LinkedIn, restoring cookies if available */
   async login(): Promise<void> {
     const page = this.browser.getPage();
 
     // Try to restore cookies
-    if (fs.existsSync(COOKIE_PATH)) {
+    if (fs.existsSync(this.cookiePath)) {
       try {
-        const cookies = JSON.parse(fs.readFileSync(COOKIE_PATH, "utf-8"));
+        const cookies = JSON.parse(fs.readFileSync(this.cookiePath, "utf-8"));
         await page.setCookie(...cookies);
         console.log("🍪 Restored LinkedIn cookies");
 
@@ -53,11 +63,12 @@ export class LinkedInService {
     await this.browser.navigate("https://www.linkedin.com/login");
     await thinkingPause();
 
-    const username = process.env.LINKEDIN_USERNAME;
-    const password = process.env.LINKEDIN_PASSWORD;
+    // Use injected credentials or fall back to env vars for backward compat
+    const username = this.credentials?.username || process.env.LINKEDIN_USERNAME;
+    const password = this.credentials?.password || process.env.LINKEDIN_PASSWORD;
 
     if (!username || !password) {
-      throw new Error("LINKEDIN_USERNAME and LINKEDIN_PASSWORD must be set in .env");
+      throw new Error("LinkedIn credentials not available. Set them via the dashboard or in .env");
     }
 
     // Type username with human-like speed
@@ -383,12 +394,12 @@ export class LinkedInService {
       const page = this.browser.getPage();
       const cookies = await page.cookies();
 
-      const dir = path.dirname(COOKIE_PATH);
+      const dir = path.dirname(this.cookiePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      fs.writeFileSync(COOKIE_PATH, JSON.stringify(cookies, null, 2));
+      fs.writeFileSync(this.cookiePath, JSON.stringify(cookies, null, 2));
     } catch (err) {
       console.error("Failed to save cookies:", err);
     }

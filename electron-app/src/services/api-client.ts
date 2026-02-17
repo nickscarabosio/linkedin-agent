@@ -51,14 +51,46 @@ interface NewCandidate {
   match_score?: number;
 }
 
+interface LinkedInCredentials {
+  linkedin_email: string;
+  encrypted_credentials: string;
+  encryption_iv: string;
+  encryption_auth_tag: string;
+}
+
+interface UserProfile {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  telegram_chat_id: number | null;
+  is_active: boolean;
+}
+
 export class ApiClient {
   private client: AxiosInstance;
 
-  constructor(baseURL: string) {
+  constructor(baseURL: string, token?: string) {
     this.client = axios.create({
       baseURL,
       timeout: 10000,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
+  }
+
+  /** Update the auth token (e.g. after refresh) */
+  setToken(token: string) {
+    this.client.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+  }
+
+  async getUserProfile(): Promise<UserProfile> {
+    const response = await this.client.get("/api/me");
+    return response.data;
+  }
+
+  async getLinkedInCredentials(): Promise<LinkedInCredentials> {
+    const response = await this.client.get("/api/me/linkedin-credentials");
+    return response.data;
   }
 
   async getApprovedMessages(): Promise<any[]> {

@@ -2,8 +2,6 @@ import puppeteer, { Browser, Page } from "puppeteer-core";
 import path from "path";
 import os from "os";
 
-const USER_DATA_DIR = path.join(os.homedir(), ".hood-hero", "chrome-profile");
-
 const REALISTIC_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
@@ -11,9 +9,12 @@ export class BrowserController {
   private browser: Browser | null = null;
   private page: Page | null = null;
   private chromePath?: string;
+  private userDataDir: string;
 
-  constructor(chromePath?: string) {
+  constructor(chromePath?: string, userId?: string) {
     this.chromePath = chromePath;
+    const profileSuffix = userId ? `chrome-profile-${userId}` : "chrome-profile";
+    this.userDataDir = path.join(os.homedir(), ".hood-hero", profileSuffix);
   }
 
   async initialize(): Promise<void> {
@@ -29,7 +30,7 @@ export class BrowserController {
         "--no-default-browser-check",
         "--disable-infobars",
         "--disable-extensions",
-        `--user-data-dir=${USER_DATA_DIR}`,
+        `--user-data-dir=${this.userDataDir}`,
         "--window-size=1920,1080",
         "--remote-debugging-port=9222",
       ];

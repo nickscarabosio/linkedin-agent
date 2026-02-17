@@ -1,20 +1,16 @@
-import TelegramBot, { InlineKeyboardMarkup } from "node-telegram-bot-api";
+import TelegramBot from "node-telegram-bot-api";
 import { Pool } from "pg";
 import dotenv from "dotenv";
 import { createApiServer } from "./api-server";
-import { initNotifier, sendApprovalNotification } from "./telegram-notifier";
+import { initNotifier } from "./telegram-notifier";
 
 dotenv.config();
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, { polling: true });
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 
-const CORWIN_CHAT_ID = parseInt(process.env.CORWIN_TELEGRAM_CHAT_ID!);
-const NICK_CHAT_ID = parseInt(process.env.NICK_TELEGRAM_CHAT_ID!);
-const NOTIFY_CHAT_IDS = [CORWIN_CHAT_ID, NICK_CHAT_ID].filter(id => !isNaN(id));
-
-// Initialize the Telegram notifier so the API server can send notifications
-initNotifier(bot, NOTIFY_CHAT_IDS);
+// Initialize the Telegram notifier with DB for dynamic recipient lookup
+initNotifier(bot, db);
 
 // Test database connection
 async function testConnection() {
@@ -31,16 +27,93 @@ async function testConnection() {
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
 
-  await bot.sendMessage(
-    chatId,
-    `🎯 Hood Hero Recruiter Bot\n\n` +
-      `Your chat ID: ${chatId}\n\n` +
-      `Commands:\n` +
-      `/status - System status\n` +
-      `/stats - Today's statistics\n` +
-      `/help - Help\n\n` +
-      `⚠️ Note: Only Corwin can approve messages.`
+  // Check if this chat is already linked to a user
+  const linked = await db.query(
+    `SELECT name, email FROM users WHERE telegram_chat_id = $1`,
+    [chatId]
   );
+
+  if (linked.rows.length > 0) {
+    const user = linked.rows[0];
+    await bot.sendMessage(
+      chatId,
+      `🎯 Hood Hero Recruiter Bot\n\n` +
+        `Linked as: ${user.name} (${user.email})\n\n` +
+        `Commands:\n` +
+        `/status - System status\n` +
+        `/stats - Today's statistics\n` +
+        `/help - Help`
+    );
+  } else {
+    await bot.sendMessage(
+      chatId,
+      `🎯 Hood Hero Recruiter Bot\n\n` +
+        `Your chat ID: ${chatId}\n\n` +
+        `To link your account, generate a code from the dashboard and send:\n` +
+        `/link <CODE>\n\n` +
+        `Commands:\n` +
+        `/status - System status\n` +
+        `/stats - Today's statistics\n` +
+        `/help - Help`
+    );
+  }
+});
+
+// /link <CODE> — link Telegram account to a user
+bot.onText(/\/link\s+(\S+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const code = match![1].toUpperCase();
+
+  try {
+    // Check if already linked
+    const existingLink = await db.query(
+      `SELECT name FROM users WHERE telegram_chat_id = $1`,
+      [chatId]
+    );
+    if (existingLink.rows.length > 0) {
+      await bot.sendMessage(chatId, `⚠️ This Telegram account is already linked to ${existingLink.rows[0].name}.`);
+      return;
+    }
+
+    // Find user with this link code
+    const result = await db.query(
+      `SELECT id, name, email FROM users
+       WHERE telegram_link_code = $1
+         AND telegram_link_code_expires_at > NOW()
+         AND telegram_chat_id IS NULL`,
+      [code]
+    );
+
+    if (result.rows.length === 0) {
+      await bot.sendMessage(chatId, "❌ Invalid or expired code. Generate a new one from the dashboard.");
+      return;
+    }
+
+    const user = result.rows[0];
+
+    // Link the account
+    await db.query(
+      `UPDATE users SET telegram_chat_id = $1, telegram_link_code = NULL, telegram_link_code_expires_at = NULL, updated_at = NOW()
+       WHERE id = $2`,
+      [chatId, user.id]
+    );
+
+    // Audit log
+    await db.query(
+      `INSERT INTO audit_logs (user_id, action, details) VALUES ($1, $2, $3)`,
+      [user.id, "telegram_linked", JSON.stringify({ chat_id: chatId })]
+    );
+
+    await bot.sendMessage(
+      chatId,
+      `✅ Linked successfully!\n\nWelcome, ${user.name}! You'll now receive approval notifications here.`
+    );
+
+    console.log(`🔗 Telegram linked: ${user.name} (${user.email}) → chat ${chatId}`);
+  } catch (error) {
+    console.error("Link command error:", error);
+    await bot.sendMessage(chatId, "❌ Error linking account. Please try again.");
+  }
 });
 
 bot.onText(/\/status/, async (msg) => {
@@ -112,13 +185,14 @@ bot.onText(/\/help/, async (msg) => {
       `❌ Skip - Reject this candidate\n` +
       `⏸️ Pause - Pause the campaign\n\n` +
       `Commands:\n` +
+      `/start - Bot info + link status\n` +
+      `/link <CODE> - Link your Telegram account\n` +
       `/status - See system status\n` +
       `/stats - See today's activity`
   );
 });
 
 // Handle callback queries (button presses)
-// Callback data format: "action:uuid" (compact to fit Telegram's 64-byte limit)
 bot.on("callback_query", async (query) => {
   try {
     const [action, id] = query.data!.split(":");
@@ -147,9 +221,17 @@ bot.on("callback_query", async (query) => {
 
 async function handleApprove(query: any, approvalId: string) {
   try {
+    // Look up user by telegram_chat_id for approved_by_user_id
+    const chatId = query.message.chat.id;
+    const userResult = await db.query(
+      `SELECT id FROM users WHERE telegram_chat_id = $1`,
+      [chatId]
+    );
+    const approvedByUserId = userResult.rows[0]?.id || null;
+
     await db.query(
-      "UPDATE approval_queue SET status = 'approved', responded_at = NOW() WHERE id = $1",
-      [approvalId]
+      `UPDATE approval_queue SET status = 'approved', responded_at = NOW(), approved_by_user_id = $1 WHERE id = $2`,
+      [approvedByUserId, approvalId]
     );
 
     await bot.answerCallbackQuery(query.id, { text: "✅ Approved!" });
@@ -161,6 +243,14 @@ async function handleApprove(query: any, approvalId: string) {
         message_id: query.message.message_id,
       }
     );
+
+    // Audit log
+    if (approvedByUserId) {
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target) VALUES ($1, $2, $3)`,
+        [approvedByUserId, "approval_approved", `approval:${approvalId}`]
+      );
+    }
 
     console.log(`✅ Approval ${approvalId} marked as approved`);
   } catch (error) {
@@ -174,6 +264,13 @@ async function handleApprove(query: any, approvalId: string) {
 
 async function handleSkip(query: any, approvalId: string) {
   try {
+    const chatId = query.message.chat.id;
+    const userResult = await db.query(
+      `SELECT id FROM users WHERE telegram_chat_id = $1`,
+      [chatId]
+    );
+    const userId = userResult.rows[0]?.id || null;
+
     await db.query(
       "UPDATE approval_queue SET status = 'rejected', responded_at = NOW() WHERE id = $1",
       [approvalId]
@@ -188,6 +285,13 @@ async function handleSkip(query: any, approvalId: string) {
         message_id: query.message.message_id,
       }
     );
+
+    if (userId) {
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target) VALUES ($1, $2, $3)`,
+        [userId, "approval_rejected", `approval:${approvalId}`]
+      );
+    }
 
     console.log(`❌ Approval ${approvalId} marked as rejected`);
   } catch (error) {

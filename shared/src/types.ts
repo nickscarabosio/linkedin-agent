@@ -90,6 +90,28 @@ export interface AISettings {
   max_tokens: number;
 }
 
+// User types
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: "admin" | "user";
+  telegram_chat_id: number | null;
+  is_active: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+// Audit log types
+export interface AuditLog {
+  id: string;
+  user_id: string;
+  action: string;
+  target: string | null;
+  details: Record<string, any> | null;
+  created_at: Date;
+}
+
 // Claude message types
 export interface GenerateMessageRequest {
   candidate: Candidate;
