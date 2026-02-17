@@ -26,7 +26,7 @@ COPY dashboard/package.json dashboard/
 RUN npm ci --workspace=dashboard --omit=dev
 
 COPY --from=builder /app/dashboard/.next/ dashboard/.next/
-COPY --from=builder /app/dashboard/public/ dashboard/public/
+COPY --from=builder /app/dashboard/next.config.js dashboard/
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
