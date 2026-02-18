@@ -247,14 +247,28 @@ ${text}`,
         return;
       }
 
-      // Extract JSON from response (handle markdown code blocks)
+      // Extract JSON from response (handle markdown code blocks, leading text, etc.)
       let jsonStr = content.text.trim();
       const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
       if (jsonMatch) {
         jsonStr = jsonMatch[1].trim();
+      } else {
+        // Try to find a JSON object in the response
+        const braceMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (braceMatch) {
+          jsonStr = braceMatch[0];
+        }
       }
 
-      const parsed = JSON.parse(jsonStr);
+      let parsed: Record<string, string>;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch {
+        console.error("Failed to parse AI JSON response:", content.text);
+        res.status(500).json({ error: "AI returned invalid JSON. Please try again." });
+        return;
+      }
+
       res.json({
         title: parsed.title || "",
         role_title: parsed.role_title || "",
@@ -839,6 +853,52 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
       res.json(result.rows);
     } catch (error) {
       console.error("PATCH /api/candidates/bulk error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // DELETE /api/candidates/bulk — bulk delete candidates
+  app.delete("/api/candidates/bulk", async (req: Request, res: Response) => {
+    try {
+      const { ids } = req.body;
+
+      if (!Array.isArray(ids) || ids.length === 0) {
+        res.status(400).json({ error: "ids must be a non-empty array" });
+        return;
+      }
+
+      const isAdmin = req.user!.role === "admin";
+
+      if (!isAdmin) {
+        const check = await db.query(
+          `SELECT c.id FROM candidates c
+           JOIN user_campaign_assignments uca ON uca.campaign_id = c.campaign_id AND uca.user_id = $1
+           WHERE c.id = ANY($2)`,
+          [req.user!.userId, ids]
+        );
+        if (check.rows.length !== ids.length) {
+          res.status(403).json({ error: "Some candidates belong to campaigns you are not assigned to" });
+          return;
+        }
+      }
+
+      // Delete related records first
+      await db.query(`DELETE FROM candidate_pipeline_progress WHERE candidate_id = ANY($1)`, [ids]);
+      await db.query(`DELETE FROM approvals WHERE candidate_id = ANY($1)`, [ids]);
+
+      const result = await db.query(
+        `DELETE FROM candidates WHERE id = ANY($1) RETURNING id`,
+        [ids]
+      );
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "candidates_bulk_delete", `candidates:${result.rows.length}`, JSON.stringify({ ids })]
+      );
+
+      res.json({ deleted: result.rows.length });
+    } catch (error) {
+      console.error("DELETE /api/candidates/bulk error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

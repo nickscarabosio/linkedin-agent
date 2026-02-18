@@ -1,8 +1,11 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import Link from "next/link";
+import { Users, Megaphone, Plus, Eye } from "lucide-react";
 import type { Campaign, Candidate, Approval, AdminStats } from "@/lib/types";
 import { ClickableStatCard } from "@/components/dashboard/clickable-stat-card";
 import { CampaignControlPanel } from "@/components/dashboard/campaign-control-panel";
@@ -42,9 +45,53 @@ export default function DashboardPage() {
 
   const statsAreLoading = activeCampaignsLoading || candidatesLoading || (isAdmin && statsLoading);
 
+  const [campaignHover, setCampaignHover] = useState(false);
+
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/candidates"
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <Users className="h-4 w-4" />
+            View Candidates
+          </Link>
+          <div
+            className="relative"
+            onMouseEnter={() => setCampaignHover(true)}
+            onMouseLeave={() => setCampaignHover(false)}
+          >
+            <Link
+              href="/campaigns"
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+            >
+              <Megaphone className="h-4 w-4" />
+              Campaigns
+            </Link>
+            {campaignHover && (
+              <div className="absolute top-full right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] z-50">
+                <Link
+                  href="/campaigns"
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <Eye className="h-4 w-4" />
+                  View Campaigns
+                </Link>
+                <Link
+                  href="/campaigns/new"
+                  className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <Plus className="h-4 w-4" />
+                  New Campaign
+                </Link>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Stat Cards */}
       {statsAreLoading ? (

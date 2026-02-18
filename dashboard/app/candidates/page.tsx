@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { QueryError } from "@/components/ui/query-error";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import type { UnifiedCandidate, Campaign, User } from "@/lib/types";
 
 const candidateStatuses = ["new", "contacted", "responded", "rejected", "skipped", "archived"] as const;
@@ -56,6 +57,7 @@ export default function CandidatesPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkStatus, setBulkStatus] = useState("");
   const [editingText, setEditingText] = useState<Record<string, string>>({});
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Build query params
   const queryParams: Record<string, string> = {};
@@ -123,6 +125,22 @@ export default function CandidatesPage() {
       queryClient.invalidateQueries({ queryKey: ["candidates"] });
       setSelectedIds(new Set());
       setBulkStatus("");
+    },
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Something went wrong");
+    },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      api.delete("/api/candidates/bulk", { data: { ids } }),
+    onSuccess: (_data, ids) => {
+      toast.success(`Deleted ${ids.length} candidates`);
+      queryClient.invalidateQueries({ queryKey: ["candidates-unified"] });
+      queryClient.invalidateQueries({ queryKey: ["candidates"] });
+      queryClient.invalidateQueries({ queryKey: ["approvals-pending"] });
+      setSelectedIds(new Set());
     },
     onError: (err: unknown) => {
       const apiErr = err as { response?: { data?: { error?: string } } };
@@ -436,17 +454,40 @@ export default function CandidatesPage() {
           >
             {bulkMutation.isPending ? "Updating..." : "Apply"}
           </Button>
-          <button
-            onClick={() => {
-              setSelectedIds(new Set());
-              setBulkStatus("");
-            }}
-            className="text-sm text-gray-500 hover:text-gray-700"
-          >
-            Clear
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => setConfirmDelete(true)}
+              disabled={bulkDeleteMutation.isPending}
+            >
+              Delete
+            </Button>
+            <button
+              onClick={() => {
+                setSelectedIds(new Set());
+                setBulkStatus("");
+              }}
+              className="text-sm text-gray-500 hover:text-gray-700"
+            >
+              Clear
+            </button>
+          </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => {
+          bulkDeleteMutation.mutate(Array.from(selectedIds));
+          setConfirmDelete(false);
+        }}
+        title="Delete Candidates"
+        description={`Are you sure you want to delete ${selectedIds.size} candidate${selectedIds.size === 1 ? "" : "s"}? This will also remove their approvals and pipeline progress. This cannot be undone.`}
+        confirmLabel="Delete"
+        variant="destructive"
+      />
     </div>
   );
 }
