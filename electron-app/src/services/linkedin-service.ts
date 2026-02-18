@@ -388,6 +388,221 @@ export class LinkedInService {
     return [];
   }
 
+  /** Send an InMail to a non-connection */
+  async sendInMail(linkedinUrl: string, subject: string, body: string): Promise<void> {
+    try {
+      console.log(`📧 Sending InMail to ${linkedinUrl}`);
+      const page = this.browser.getPage();
+
+      await this.browser.navigate(linkedinUrl);
+      await readingPause();
+
+      // Click the "Message" button (for non-connections this opens InMail)
+      const messageBtn = await page.$('button[aria-label*="Message" i]');
+      if (!messageBtn) {
+        // Fallback: try the "More" dropdown for InMail option
+        const moreBtn = await page.$('button[aria-label="More actions"]');
+        if (moreBtn) {
+          await moreBtn.click();
+          await microPause();
+          const inmailOption = await page.$('div.artdeco-dropdown__content button span::-p-text(Message)');
+          if (!inmailOption) {
+            throw new Error("Could not find InMail/Message button on profile");
+          }
+          await inmailOption.click();
+        } else {
+          throw new Error("Could not find Message or More button — InMail may not be available for this profile");
+        }
+      } else {
+        await messageBtn.click();
+      }
+
+      await thinkingPause();
+
+      // Fill subject line if present (InMail has a subject field, regular messages don't)
+      if (subject) {
+        const subjectField = await page.$('input[name="subject"], input[placeholder*="Subject" i]');
+        if (subjectField) {
+          await subjectField.click();
+          await microPause();
+          for (const char of subject) {
+            await page.keyboard.type(char, { delay: typingDelay() });
+          }
+          await microPause();
+        }
+      }
+
+      // Wait for and fill the message body
+      const msgBox = await page.waitForSelector(
+        'div.msg-form__contenteditable[contenteditable="true"]',
+        { timeout: 10000 }
+      );
+
+      if (!msgBox) {
+        throw new Error("InMail compose box did not appear");
+      }
+
+      await msgBox.click();
+      await microPause();
+
+      for (const char of body) {
+        await page.keyboard.type(char, { delay: typingDelay() });
+      }
+
+      await thinkingPause();
+
+      // Click send
+      const sendBtn = await page.$('button.msg-form__send-button');
+      if (!sendBtn) {
+        // Fallback: any Send button in the modal
+        const fallbackSend = await page.$('button::-p-text(Send)');
+        if (fallbackSend) {
+          await fallbackSend.click();
+        } else {
+          throw new Error("Could not find Send button for InMail");
+        }
+      } else {
+        await sendBtn.click();
+      }
+
+      await randomDelay(1000, 2000);
+      await this.saveCookies();
+      console.log("✅ InMail sent");
+    } catch (error) {
+      console.error("Error sending InMail:", error);
+      throw error;
+    }
+  }
+
+  /** View a LinkedIn profile to register a profile view */
+  async viewProfile(linkedinUrl: string): Promise<void> {
+    try {
+      console.log(`👁️ Viewing profile: ${linkedinUrl}`);
+      const page = this.browser.getPage();
+
+      await this.browser.navigate(linkedinUrl);
+      await readingPause();
+
+      // Scroll through profile sections to simulate reading
+      const scrollSteps = 3 + Math.floor(Math.random() * 3); // 3-5 scrolls
+      for (let i = 0; i < scrollSteps; i++) {
+        const scrollAmount = 300 + Math.floor(Math.random() * 400);
+        await page.evaluate((amount) => window.scrollBy(0, amount), scrollAmount);
+        await randomDelay(1500, 3500);
+      }
+
+      // Extended reading pause (5-15 seconds total viewing time)
+      await randomDelay(5000, 15000);
+
+      // Scroll back up partially (natural behavior)
+      await page.evaluate(() => window.scrollTo(0, Math.random() * 500));
+      await microPause();
+
+      await this.saveCookies();
+      console.log("✅ Profile viewed");
+    } catch (error) {
+      console.error("Error viewing profile:", error);
+      throw error;
+    }
+  }
+
+  /** Withdraw a pending connection request */
+  async withdrawConnectionRequest(linkedinUrl: string): Promise<void> {
+    try {
+      console.log(`↩️ Withdrawing connection request: ${linkedinUrl}`);
+      const page = this.browser.getPage();
+
+      await this.browser.navigate(linkedinUrl);
+      await readingPause();
+
+      // Method 1: Look for "Pending" button on profile
+      const pendingBtn = await page.$('button[aria-label*="Pending" i]');
+      if (pendingBtn) {
+        await pendingBtn.click();
+        await microPause();
+
+        // Click "Withdraw" in the dropdown/confirmation
+        const withdrawBtn = await page.$('button::-p-text(Withdraw)');
+        if (withdrawBtn) {
+          await withdrawBtn.click();
+          await microPause();
+
+          // Confirm withdrawal if there's a confirmation dialog
+          const confirmBtn = await page.$('button::-p-text(Withdraw)');
+          if (confirmBtn) {
+            await confirmBtn.click();
+          }
+
+          await randomDelay(1000, 2000);
+          await this.saveCookies();
+          console.log("✅ Connection request withdrawn via profile");
+          return;
+        }
+      }
+
+      // Method 2: Navigate to Sent Invitations page
+      console.log("📋 Pending button not found on profile, trying Sent Invitations page...");
+      await this.browser.navigate("https://www.linkedin.com/mynetwork/invitation-manager/sent/");
+      await readingPause();
+
+      // Extract the LinkedIn username from the URL to find the right invitation
+      const usernameMatch = linkedinUrl.match(/\/in\/([^/?]+)/);
+      if (!usernameMatch) {
+        throw new Error("Could not extract LinkedIn username from URL");
+      }
+      const username = usernameMatch[1];
+
+      // Find the invitation card for this person and click Withdraw
+      const withdrawn = await page.evaluate((targetUsername: string) => {
+        const invitationCards = Array.from(document.querySelectorAll('.invitation-card'));
+        for (let i = 0; i < invitationCards.length; i++) {
+          const card = invitationCards[i];
+          const profileLink = card.querySelector(`a[href*="/in/${targetUsername}"]`);
+          if (profileLink) {
+            const withdrawBtn = card.querySelector('button') as HTMLButtonElement;
+            if (withdrawBtn && withdrawBtn.textContent?.includes('Withdraw')) {
+              withdrawBtn.click();
+              return true;
+            }
+          }
+        }
+        return false;
+      }, username);
+
+      if (!withdrawn) {
+        // Fallback: scroll and look for Withdraw buttons
+        const allWithdrawBtns = await page.$$('button[aria-label*="Withdraw" i]');
+        for (const btn of allWithdrawBtns) {
+          // Check if this button is near the target profile link
+          const nearTarget = await page.evaluate(
+            (btnEl: Element, uname: string) => {
+              const container = btnEl.closest('li, .invitation-card, [data-view-name]');
+              if (!container) return false;
+              return !!container.querySelector(`a[href*="/in/${uname}"]`);
+            },
+            btn,
+            username
+          );
+          if (nearTarget) {
+            await btn.click();
+            await microPause();
+            // Confirm if needed
+            const confirmBtn = await page.$('button::-p-text(Withdraw)');
+            if (confirmBtn) await confirmBtn.click();
+            break;
+          }
+        }
+      }
+
+      await randomDelay(1000, 2000);
+      await this.saveCookies();
+      console.log("✅ Connection request withdrawn");
+    } catch (error) {
+      console.error("Error withdrawing connection request:", error);
+      throw error;
+    }
+  }
+
   /** Persist cookies for session reuse */
   private async saveCookies(): Promise<void> {
     try {

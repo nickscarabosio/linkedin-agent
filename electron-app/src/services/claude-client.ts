@@ -14,6 +14,33 @@ interface CampaignContext {
   ideal_candidate_profile?: string;
 }
 
+interface ScoredMessageContext {
+  candidate: {
+    name: string;
+    title: string;
+    company: string;
+    location: string;
+  };
+  campaign: {
+    role_title: string;
+    role_description: string;
+    job_spec?: {
+      function?: string;
+      role_level?: string;
+      client_description_external?: string;
+      role_one_liner?: string;
+      industry_targets?: string[];
+    };
+  };
+  scoring_result: {
+    bucket: string;
+    personalization_hook: string;
+    score_rationale: string;
+    total_score: number;
+  };
+  action_type: "connection_request" | "message" | "follow_up" | "inmail";
+}
+
 interface MessageResponse {
   message: string;
   reasoning: string;
@@ -97,6 +124,108 @@ Return a JSON object with:
       }
     } catch (error) {
       console.error("Claude API error:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate a message using scoring data and personalization_hook.
+   * Respects character limits per action type and uses the scoring context
+   * for more targeted messaging.
+   */
+  async generateScoredMessage(context: ScoredMessageContext): Promise<MessageResponse> {
+    try {
+      const charLimits: Record<string, number> = {
+        connection_request: 300,
+        message: 2000,
+        follow_up: 2000,
+        inmail: 1900,
+      };
+
+      const charLimit = charLimits[context.action_type] || 2000;
+
+      const actionDescriptions: Record<string, string> = {
+        connection_request: "a LinkedIn connection request note (very brief, 2-3 sentences max)",
+        message: "an initial LinkedIn message after connection was accepted (brief, conversational)",
+        follow_up: "a follow-up message when no reply was received (short, low pressure)",
+        inmail: "a LinkedIn InMail with Subject line on the first line formatted as 'Subject: ...' followed by the body",
+      };
+
+      const jobSpec = context.campaign.job_spec;
+
+      const prompt = `You are a professional recruiter writing personalized LinkedIn outreach.
+
+Generate ${actionDescriptions[context.action_type]} for this candidate:
+
+## CANDIDATE
+- Name: ${context.candidate.name}
+- Title: ${context.candidate.title}
+- Company: ${context.candidate.company}
+- Location: ${context.candidate.location}
+
+## ROLE
+- Title: ${context.campaign.role_title}
+${jobSpec?.function ? `- Function: ${jobSpec.function}` : ""}
+${jobSpec?.role_level ? `- Level: ${jobSpec.role_level}` : ""}
+${jobSpec?.client_description_external ? `- Client: ${jobSpec.client_description_external}` : ""}
+${jobSpec?.role_one_liner ? `- One-liner: ${jobSpec.role_one_liner}` : ""}
+
+## SCORING CONTEXT
+- Score: ${context.scoring_result.total_score}/100 (${context.scoring_result.bucket})
+- Why they scored well: ${context.scoring_result.score_rationale}
+- Personalization hook: ${context.scoring_result.personalization_hook}
+
+## REQUIREMENTS
+- CHARACTER LIMIT: ${charLimit} characters maximum. This is critical — LinkedIn will reject messages over this limit.
+- Use the personalization hook naturally in the message — it should feel genuine, not forced
+- First name only (${context.candidate.name.split(" ")[0]})
+- Professional but warm tone — like a real recruiter, not a bot
+- No phrases like "I came across your profile" or "I noticed your impressive background"
+- Don't be overly flattering or salesy
+${context.action_type === "inmail" ? "- First line MUST be 'Subject: <subject text>' followed by blank line then the body" : ""}
+
+Return JSON:
+{
+  "message": "the outreach message (under ${charLimit} chars)",
+  "reasoning": "why this message works for this specific candidate"
+}`;
+
+      const response = await this.client.messages.create({
+        model: "claude-sonnet-4-5-20250929",
+        max_tokens: 800,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      let content =
+        response.content[0].type === "text" ? response.content[0].text : "";
+
+      content = content.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+
+      try {
+        const parsed = JSON.parse(content);
+        // Enforce character limit
+        let message = parsed.message || content;
+        if (message.length > charLimit) {
+          message = message.slice(0, charLimit - 3) + "...";
+        }
+        return {
+          message,
+          reasoning: parsed.reasoning || "Generated with scoring context",
+          tokens_used: response.usage.output_tokens,
+        };
+      } catch (e) {
+        let message = content;
+        if (message.length > charLimit) {
+          message = message.slice(0, charLimit - 3) + "...";
+        }
+        return {
+          message,
+          reasoning: "Generated with scoring context",
+          tokens_used: response.usage.output_tokens,
+        };
+      }
+    } catch (error) {
+      console.error("Claude API error (generateScoredMessage):", error);
       throw error;
     }
   }

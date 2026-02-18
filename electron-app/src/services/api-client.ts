@@ -275,4 +275,22 @@ export class ApiClient {
       return null;
     }
   }
+
+  async updatePipelineStatus(candidateId: string, status: string): Promise<void> {
+    try {
+      await this.client.patch(`/api/candidates/${candidateId}/pipeline-status`, { status });
+    } catch (error) {
+      console.error("Error updating pipeline status:", error);
+    }
+  }
+
+  async getExpiredConnections(): Promise<any[]> {
+    try {
+      const response = await this.client.get("/api/candidates/expired-connections");
+      return response.data;
+    } catch (error) {
+      console.error("Error getting expired connections:", error);
+      return [];
+    }
+  }
 }

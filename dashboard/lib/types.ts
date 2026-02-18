@@ -18,6 +18,7 @@ export interface Campaign {
   ideal_candidate_profile: string | null;
   linkedin_search_url: string | null;
   pipeline_id: string | null;
+  job_spec?: JobSpec;
   status: "active" | "paused" | "completed";
   priority: number;
   created_at: string;
@@ -26,6 +27,29 @@ export interface Campaign {
   assigned_user_names?: string[] | null;
   assigned_users?: { id: string; name: string }[];
 }
+
+export type PipelineStatus =
+  | "identified"
+  | "connection_sent"
+  | "connection_expired"
+  | "connected_no_message"
+  | "message_1_sent"
+  | "message_2_sent"
+  | "inmail_sent"
+  | "replied_positive"
+  | "replied_negative"
+  | "replied_maybe"
+  | "qualify_link_sent"
+  | "qualified"
+  | "intro_booked"
+  | "client_reviewing"
+  | "offer_extended"
+  | "placed"
+  | "passed"
+  | "not_a_fit"
+  | "archived";
+
+export type ScoreBucket = "Hot" | "Warm" | "Cool" | "Cold";
 
 export interface Candidate {
   id: string;
@@ -37,6 +61,12 @@ export interface Candidate {
   location: string;
   linkedin_url: string;
   status: "new" | "contacted" | "responded" | "rejected" | "skipped" | "archived";
+  pipeline_status?: PipelineStatus;
+  total_score?: number | null;
+  score_bucket?: ScoreBucket | null;
+  score_data?: ScoringResult | null;
+  personalization_hook?: string | null;
+  scored_at?: string | null;
   created_at: string;
 }
 
@@ -175,4 +205,91 @@ export interface Settings {
   include_note_with_request: boolean;
   max_follow_ups: number;
   follow_up_delay_days: number;
+}
+
+// ============================================================
+// SCORING SYSTEM TYPES
+// ============================================================
+
+export interface JobSpec {
+  industry_targets?: string[];
+  industry_adjacent_ok?: string[];
+  company_size_min?: number;
+  company_size_max?: number;
+  growth_stage?: string[];
+  location?: string;
+  remote_policy?: "onsite" | "hybrid" | "remote" | string;
+  years_experience_min?: number;
+  years_experience_ideal?: number;
+  required_skills?: string[];
+  nice_to_have_skills?: string[];
+  required_certifications?: string[];
+  education_required?: boolean;
+  education_preferred?: string;
+  disqualify_companies?: string[];
+  disqualify_titles?: string[];
+  client_description_external?: string;
+  role_one_liner?: string;
+  function?: string;
+  role_level?: string;
+  weight_overrides?: Record<string, number>;
+  notes?: string;
+}
+
+export interface WorkExperience {
+  title: string;
+  company: string;
+  company_size?: number;
+  industry?: string;
+  start_date?: string;
+  end_date?: string | null;
+  duration_months?: number;
+  is_current?: boolean;
+  description?: string;
+}
+
+export interface Education {
+  school: string;
+  degree?: string;
+  field?: string;
+  graduation_year?: number;
+}
+
+export interface CandidateProfile {
+  current_title?: string;
+  current_company?: string;
+  current_company_size?: number;
+  current_industry?: string;
+  location?: string;
+  open_to_work?: boolean;
+  experience?: WorkExperience[];
+  education?: Education[];
+  skills?: string[];
+  certifications?: string[];
+  summary?: string;
+  has_posted_content?: boolean;
+  mutual_connections?: number;
+  profile_completeness?: "full" | "partial" | "sparse";
+  recent_activity?: boolean;
+}
+
+export interface ScoreBreakdown {
+  role_fit: number;
+  company_context: number;
+  trajectory_stability: number;
+  education: number;
+  profile_quality: number;
+  bonus: number;
+}
+
+export interface ScoringResult {
+  hard_filter_passed: boolean;
+  disqualify_reason: string | null;
+  scores: ScoreBreakdown;
+  total_score: number;
+  bucket: ScoreBucket;
+  score_rationale: string;
+  recommended_action: string;
+  personalization_hook: string;
+  flags: string[];
 }

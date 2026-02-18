@@ -20,6 +20,8 @@ import {
   JwtPayload,
 } from "./middleware/auth";
 import { encrypt, decrypt } from "./services/encryption";
+import { ScoringService, CandidateProfile, JobSpec } from "./scoring-service";
+import { PipelineEngine, PipelineStatus } from "./pipeline-engine";
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "";
 
@@ -735,6 +737,34 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
     }
   });
 
+  // GET /api/candidates/expired-connections — candidates in connection_sent for 21+ days
+  app.get("/api/candidates/expired-connections", async (req: Request, res: Response) => {
+    try {
+      const expiryDate = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000);
+
+      // Find candidates in connection_sent where the status was set 21+ days ago
+      const result = await db.query(
+        `SELECT c.* FROM candidates c
+         WHERE c.pipeline_status = 'connection_sent'
+           AND EXISTS (
+             SELECT 1 FROM agent_actions aa
+             WHERE aa.candidate_id = c.id
+               AND aa.action_type = 'connection_request_sent'
+               AND aa.success = true
+               AND aa.created_at < $1
+           )
+         ORDER BY c.created_at ASC
+         LIMIT 20`,
+        [expiryDate]
+      );
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error("GET /api/candidates/expired-connections error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // GET /api/candidates/unified — all candidates with approval + pipeline data
   app.get("/api/candidates/unified", async (req: Request, res: Response) => {
     try {
@@ -1264,7 +1294,7 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
   app.patch("/api/campaigns/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const { status, title, priority, linkedin_search_url } = req.body;
+      const { status, title, priority, linkedin_search_url, job_spec } = req.body;
       const isAdmin = req.user!.role === "admin";
 
       // Ownership check: user must be assigned to campaign or be admin
@@ -1299,6 +1329,10 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
         setClauses.push(`linkedin_search_url = $${idx++}`);
         values.push(linkedin_search_url || null);
       }
+      if (job_spec !== undefined) {
+        setClauses.push(`job_spec = $${idx++}`);
+        values.push(JSON.stringify(job_spec));
+      }
 
       if (setClauses.length === 0) {
         res.status(400).json({ error: "No fields to update" });
@@ -1318,7 +1352,7 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
 
       await db.query(
         `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
-        [req.user!.userId, "campaign_updated", `campaign:${id}`, JSON.stringify({ status, title, priority, linkedin_search_url })]
+        [req.user!.userId, "campaign_updated", `campaign:${id}`, JSON.stringify({ status, title, priority, linkedin_search_url, job_spec: !!job_spec })]
       );
 
       res.json(result.rows[0]);
@@ -2367,6 +2401,407 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
     } catch (error) {
       console.error("DELETE /api/admin/templates/:id error:", error);
       res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ============================================================
+  // SCORING ENDPOINTS
+  // ============================================================
+
+  const scoringService = new ScoringService(
+    new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  );
+
+  // GET /api/candidates/:id/score — return stored scoring result
+  app.get("/api/candidates/:id/score", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const result = await db.query(
+        `SELECT score_data, total_score, score_bucket, personalization_hook, scored_at
+         FROM candidates WHERE id = $1`,
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Candidate not found" });
+        return;
+      }
+
+      const row = result.rows[0];
+      if (!row.score_data) {
+        res.status(404).json({ error: "Candidate has not been scored yet" });
+        return;
+      }
+
+      res.json({
+        score_data: row.score_data,
+        total_score: row.total_score,
+        score_bucket: row.score_bucket,
+        personalization_hook: row.personalization_hook,
+        scored_at: row.scored_at,
+      });
+    } catch (error) {
+      console.error("GET /api/candidates/:id/score error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/candidates/:id/score — score a single candidate against their campaign's job_spec
+  app.post("/api/candidates/:id/score", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      // Fetch candidate with campaign join
+      const candidateResult = await db.query(
+        `SELECT c.*, camp.job_spec, camp.role_title, camp.role_description
+         FROM candidates c
+         JOIN campaigns camp ON c.campaign_id = camp.id
+         WHERE c.id = $1`,
+        [id]
+      );
+
+      if (candidateResult.rows.length === 0) {
+        res.status(404).json({ error: "Candidate not found" });
+        return;
+      }
+
+      const row = candidateResult.rows[0];
+      const jobSpec: JobSpec = row.job_spec || {};
+
+      if (!jobSpec.function && !jobSpec.industry_targets?.length) {
+        res.status(400).json({
+          error: "Campaign has no job_spec configured. Update the campaign with a job specification before scoring.",
+        });
+        return;
+      }
+
+      // Build candidate profile from profile_data + top-level fields
+      const profileData = row.profile_data || {};
+      const candidateProfile: CandidateProfile = {
+        current_title: row.title || profileData.current_title,
+        current_company: row.company || profileData.current_company,
+        current_company_size: profileData.current_company_size,
+        current_industry: profileData.current_industry,
+        location: row.location || profileData.location,
+        open_to_work: profileData.open_to_work,
+        experience: profileData.experience || [],
+        education: profileData.education || [],
+        skills: profileData.skills || [],
+        certifications: profileData.certifications || [],
+        summary: profileData.summary,
+        has_posted_content: profileData.has_posted_content,
+        mutual_connections: profileData.mutual_connections,
+        profile_completeness: profileData.profile_completeness,
+        recent_activity: profileData.recent_activity,
+      };
+
+      const scoringResult = await scoringService.scoreCandidate(
+        candidateProfile,
+        jobSpec
+      );
+
+      // Persist scoring results
+      await db.query(
+        `UPDATE candidates SET
+           score_data = $1,
+           total_score = $2,
+           score_bucket = $3,
+           personalization_hook = $4,
+           scored_at = NOW()
+         WHERE id = $5`,
+        [
+          JSON.stringify(scoringResult),
+          scoringResult.total_score,
+          scoringResult.bucket,
+          scoringResult.personalization_hook,
+          id,
+        ]
+      );
+
+      // Update pipeline_status based on score if still in 'identified'
+      if (row.pipeline_status === "identified" || !row.pipeline_status) {
+        if (!scoringResult.hard_filter_passed || scoringResult.bucket === "Cold") {
+          await db.query(
+            `UPDATE candidates SET pipeline_status = 'archived' WHERE id = $1`,
+            [id]
+          );
+        }
+      }
+
+      await db.query(
+        `INSERT INTO agent_actions (candidate_id, campaign_id, action_type, success, metadata)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          id,
+          row.campaign_id,
+          "candidate_scored",
+          true,
+          JSON.stringify({
+            total_score: scoringResult.total_score,
+            bucket: scoringResult.bucket,
+            hard_filter_passed: scoringResult.hard_filter_passed,
+          }),
+        ]
+      );
+
+      res.json(scoringResult);
+    } catch (error) {
+      console.error("POST /api/candidates/:id/score error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // POST /api/campaigns/:id/score-candidates — batch score all unscored candidates
+  app.post("/api/campaigns/:id/score-candidates", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      // Fetch campaign with job_spec
+      const campaignResult = await db.query(
+        `SELECT * FROM campaigns WHERE id = $1`,
+        [id]
+      );
+
+      if (campaignResult.rows.length === 0) {
+        res.status(404).json({ error: "Campaign not found" });
+        return;
+      }
+
+      const campaign = campaignResult.rows[0];
+      const jobSpec: JobSpec = campaign.job_spec || {};
+
+      if (!jobSpec.function && !jobSpec.industry_targets?.length) {
+        res.status(400).json({
+          error: "Campaign has no job_spec configured. Update the campaign with a job specification before scoring.",
+        });
+        return;
+      }
+
+      // Get unscored candidates (no scored_at)
+      const candidatesResult = await db.query(
+        `SELECT * FROM candidates
+         WHERE campaign_id = $1 AND scored_at IS NULL
+         ORDER BY created_at ASC
+         LIMIT 50`,
+        [id]
+      );
+
+      const candidates = candidatesResult.rows;
+      if (candidates.length === 0) {
+        res.json({ scored: 0, message: "No unscored candidates found" });
+        return;
+      }
+
+      const results = {
+        scored: 0,
+        failed: 0,
+        buckets: { Hot: 0, Warm: 0, Cool: 0, Cold: 0 } as Record<string, number>,
+        disqualified: 0,
+      };
+
+      // Process in batches of 10 (sequential within batch to avoid rate limits)
+      for (const candidate of candidates) {
+        try {
+          const profileData = candidate.profile_data || {};
+          const candidateProfile: CandidateProfile = {
+            current_title: candidate.title || profileData.current_title,
+            current_company: candidate.company || profileData.current_company,
+            current_company_size: profileData.current_company_size,
+            current_industry: profileData.current_industry,
+            location: candidate.location || profileData.location,
+            open_to_work: profileData.open_to_work,
+            experience: profileData.experience || [],
+            education: profileData.education || [],
+            skills: profileData.skills || [],
+            certifications: profileData.certifications || [],
+            summary: profileData.summary,
+            has_posted_content: profileData.has_posted_content,
+            mutual_connections: profileData.mutual_connections,
+            profile_completeness: profileData.profile_completeness,
+            recent_activity: profileData.recent_activity,
+          };
+
+          const scoringResult = await scoringService.scoreCandidate(
+            candidateProfile,
+            jobSpec
+          );
+
+          await db.query(
+            `UPDATE candidates SET
+               score_data = $1,
+               total_score = $2,
+               score_bucket = $3,
+               personalization_hook = $4,
+               scored_at = NOW()
+             WHERE id = $5`,
+            [
+              JSON.stringify(scoringResult),
+              scoringResult.total_score,
+              scoringResult.bucket,
+              scoringResult.personalization_hook,
+              candidate.id,
+            ]
+          );
+
+          // Auto-archive disqualified/cold candidates
+          if (
+            (candidate.pipeline_status === "identified" || !candidate.pipeline_status) &&
+            (!scoringResult.hard_filter_passed || scoringResult.bucket === "Cold")
+          ) {
+            await db.query(
+              `UPDATE candidates SET pipeline_status = 'archived' WHERE id = $1`,
+              [candidate.id]
+            );
+          }
+
+          results.scored++;
+          if (!scoringResult.hard_filter_passed) {
+            results.disqualified++;
+          } else {
+            results.buckets[scoringResult.bucket]++;
+          }
+        } catch (err) {
+          console.error(`Failed to score candidate ${candidate.id}:`, err);
+          results.failed++;
+        }
+      }
+
+      await db.query(
+        `INSERT INTO agent_actions (campaign_id, action_type, success, metadata)
+         VALUES ($1, $2, $3, $4)`,
+        [
+          id,
+          "batch_score_candidates",
+          true,
+          JSON.stringify(results),
+        ]
+      );
+
+      res.json(results);
+    } catch (error) {
+      console.error("POST /api/campaigns/:id/score-candidates error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // ============================================================
+  // PIPELINE STATUS ENDPOINTS
+  // ============================================================
+
+  const pipelineEngine = new PipelineEngine(db);
+
+  // GET /api/candidates/:id/pipeline-transitions — get valid next statuses
+  app.get("/api/candidates/:id/pipeline-transitions", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const result = await db.query(
+        `SELECT pipeline_status FROM candidates WHERE id = $1`,
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Candidate not found" });
+        return;
+      }
+
+      const currentStatus = (result.rows[0].pipeline_status || "identified") as PipelineStatus;
+      const validTransitions = pipelineEngine.getValidTransitions(currentStatus);
+
+      res.json({
+        current_status: currentStatus,
+        valid_transitions: validTransitions,
+      });
+    } catch (error) {
+      console.error("GET /api/candidates/:id/pipeline-transitions error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/candidates/:id/pipeline-status — transition pipeline_status with validation
+  app.patch("/api/candidates/:id/pipeline-status", async (req: Request, res: Response) => {
+    try {
+      const id = req.params.id as string;
+      const { status, force, metadata } = req.body;
+
+      if (!status) {
+        res.status(400).json({ error: "status is required" });
+        return;
+      }
+
+      const validStatuses: PipelineStatus[] = [
+        "identified", "connection_sent", "connection_expired", "connected_no_message",
+        "message_1_sent", "message_2_sent", "inmail_sent",
+        "replied_positive", "replied_negative", "replied_maybe",
+        "qualify_link_sent", "qualified", "intro_booked",
+        "client_reviewing", "offer_extended", "placed",
+        "passed", "not_a_fit", "archived",
+      ];
+
+      if (!validStatuses.includes(status)) {
+        res.status(400).json({
+          error: `Invalid status "${status}". Must be one of: ${validStatuses.join(", ")}`,
+        });
+        return;
+      }
+
+      // Check candidate exists
+      const candidateCheck = await db.query(
+        `SELECT id, pipeline_status FROM candidates WHERE id = $1`,
+        [id]
+      );
+      if (candidateCheck.rows.length === 0) {
+        res.status(404).json({ error: "Candidate not found" });
+        return;
+      }
+
+      // Admin force transition (skip timing but still validate path)
+      if (force && req.user!.role === "admin") {
+        await pipelineEngine.forceTransition(id, status, {
+          forced_by: req.user!.userId,
+          ...metadata,
+        });
+      } else {
+        // Check if transition is allowed (path + timing)
+        const check = await pipelineEngine.canTransition(id, status);
+        if (!check.allowed) {
+          res.status(422).json({ error: check.reason });
+          return;
+        }
+
+        await pipelineEngine.transitionCandidate(id, status, {
+          triggered_by: req.user!.userId,
+          ...metadata,
+        });
+      }
+
+      // Fetch updated candidate
+      const updated = await db.query(
+        `SELECT * FROM candidates WHERE id = $1`,
+        [id]
+      );
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [
+          req.user!.userId,
+          "pipeline_status_changed",
+          `candidate:${id}`,
+          JSON.stringify({
+            from: candidateCheck.rows[0].pipeline_status,
+            to: status,
+            force: !!force,
+          }),
+        ]
+      );
+
+      res.json(updated.rows[0]);
+    } catch (error: any) {
+      console.error("PATCH /api/candidates/:id/pipeline-status error:", error);
+      if (error.message?.includes("Cannot transition")) {
+        res.status(422).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: "Internal server error" });
+      }
     }
   });
 

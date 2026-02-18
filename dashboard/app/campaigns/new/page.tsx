@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
-import type { ParsedJD, Pipeline } from "@/lib/types";
+import type { ParsedJD, Pipeline, JobSpec } from "@/lib/types";
+import { JobSpecEditor } from "@/components/campaigns/job-spec-editor";
 
 const campaignSchema = z.object({
   title: z.string().min(1, "Title is required").max(200),
@@ -37,6 +38,7 @@ export default function NewCampaignPage() {
   const [pasteText, setPasteText] = useState("");
   const [dragActive, setDragActive] = useState(false);
   const [assignedUserIds, setAssignedUserIds] = useState<Set<string>>(new Set());
+  const [jobSpec, setJobSpec] = useState<JobSpec>({});
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { data: pipelines } = useQuery<Pipeline[]>({
@@ -133,6 +135,7 @@ export default function NewCampaignPage() {
         priority: parseInt(data.priority || "1", 10),
         pipeline_id: data.pipeline_id || null,
         assigned_user_ids: Array.from(assignedUserIds),
+        job_spec: Object.keys(jobSpec).length > 0 ? jobSpec : undefined,
       });
       router.push("/campaigns");
     } catch (err: unknown) {
@@ -275,6 +278,8 @@ export default function NewCampaignPage() {
           </Select>
           <p className="mt-1 text-xs text-gray-400">Leave empty to use the default pipeline</p>
         </div>
+
+        <JobSpecEditor value={jobSpec} onChange={setJobSpec} />
 
         {activeUsers && activeUsers.length > 0 && (
           <div>

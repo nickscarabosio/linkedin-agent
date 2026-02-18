@@ -40,13 +40,16 @@ export class MainLoop {
         // 3. Discover new candidates from LinkedIn search
         await this.discoverCandidates();
 
-        // 4. Process pipeline actions for pipeline-enabled campaigns
+        // 4. Check for expired connections (21+ days with no acceptance)
+        await this.checkConnectionExpiry();
+
+        // 5. Process pipeline actions for pipeline-enabled campaigns
         await this.processPipelineActions();
 
-        // 5. Generate messages for qualified candidates (fallback for non-pipeline campaigns)
+        // 6. Generate messages for qualified candidates (fallback for non-pipeline campaigns)
         await this.findAndContactCandidates();
 
-        // 6. Check for responses (stub)
+        // 7. Check for responses (stub)
         await this.checkForResponses();
 
         // Sleep before next iteration
@@ -83,6 +86,12 @@ export class MainLoop {
               approval.linkedin_url,
               text
             );
+          } else if (approval.approval_type === "inmail") {
+            // InMail: extract subject from first line if present, rest is body
+            const lines = text.split("\n");
+            const subject = lines[0]?.startsWith("Subject:") ? lines[0].replace("Subject:", "").trim() : "";
+            const body = subject ? lines.slice(1).join("\n").trim() : text;
+            await this.linkedin.sendInMail(approval.linkedin_url, subject, body);
           } else {
             await this.linkedin.sendMessage(approval.linkedin_url, text);
           }
@@ -90,10 +99,25 @@ export class MainLoop {
           await this.api.markApprovalSent(approval.id);
           await this.api.updateCandidateStatus(approval.candidate_id, "contacted");
 
+          // Update pipeline_status based on approval type
+          const pipelineStatusMap: Record<string, string> = {
+            connection_request: "connection_sent",
+            message: "message_1_sent",
+            inmail: "inmail_sent",
+          };
+          const newPipelineStatus = pipelineStatusMap[approval.approval_type];
+          if (newPipelineStatus) {
+            await this.api.updatePipelineStatus(approval.candidate_id, newPipelineStatus);
+          }
+
           await this.api.logAction({
             candidate_id: approval.candidate_id,
             campaign_id: approval.campaign_id,
-            action_type: approval.approval_type === "connection_request" ? "connection_request_sent" : "message_sent",
+            action_type: approval.approval_type === "connection_request"
+              ? "connection_request_sent"
+              : approval.approval_type === "inmail"
+                ? "inmail_sent"
+                : "message_sent",
             success: true,
           });
 
@@ -282,6 +306,54 @@ export class MainLoop {
         break;
       }
 
+      case "inmail": {
+        // InMail: generate message via Claude and create approval
+        const canInmail = await this.api.checkRateLimits("inmail");
+        if (!canInmail) return;
+        const { message: inmailMsg, reasoning: inmailReasoning } = await this.claude.generateMessage(
+          candidate,
+          { role_title: campaign.role_title, role_description: campaign.role_description, ideal_candidate_profile: campaign.ideal_candidate_profile }
+        );
+        await this.api.createApprovalRequest({
+          candidate_id: candidate.id,
+          campaign_id: campaign.id,
+          proposed_text: inmailMsg,
+          context: inmailReasoning,
+          reasoning: inmailReasoning,
+          approval_type: "inmail",
+        });
+        console.log(`📝 [Pipeline] Created inmail approval for ${candidate.name}`);
+        break;
+      }
+
+      case "profile_view": {
+        // View profile on LinkedIn — no approval needed, auto-advance
+        await this.linkedin.viewProfile(candidate.linkedin_url);
+        await this.api.logAction({
+          candidate_id: candidate.id,
+          campaign_id: campaign.id,
+          action_type: "profile_viewed",
+          success: true,
+        });
+        await this.api.advancePipeline(candidate.id);
+        console.log(`👁️ [Pipeline] Viewed profile for ${candidate.name}, advancing`);
+        break;
+      }
+
+      case "withdraw": {
+        // Withdraw pending connection request — no approval needed, auto-advance
+        await this.linkedin.withdrawConnectionRequest(candidate.linkedin_url);
+        await this.api.logAction({
+          candidate_id: candidate.id,
+          campaign_id: campaign.id,
+          action_type: "connection_withdrawn",
+          success: true,
+        });
+        await this.api.advancePipeline(candidate.id);
+        console.log(`↩️ [Pipeline] Withdrew connection for ${candidate.name}, advancing`);
+        break;
+      }
+
       case "reminder": {
         // Create a note as reminder — no approval needed
         await this.api.advancePipeline(candidate.id);
@@ -369,6 +441,70 @@ export class MainLoop {
       console.log("✅ Response check complete");
     } catch (error) {
       console.error("Error checking for responses:", error);
+    }
+  }
+
+  /** Check for connection requests that have expired (21+ days) and trigger InMail fallback */
+  private async checkConnectionExpiry() {
+    try {
+      // Find candidates in connection_sent status for 21+ days
+      const expiredCandidates = await this.api.getExpiredConnections();
+
+      if (!expiredCandidates || expiredCandidates.length === 0) {
+        return;
+      }
+
+      console.log(`⏱️ Found ${expiredCandidates.length} expired connection requests`);
+
+      for (const candidate of expiredCandidates) {
+        try {
+          // Transition to connection_expired
+          await this.api.updatePipelineStatus(candidate.id, "connection_expired");
+
+          // Check if we have InMail credits available
+          const canInmail = await this.api.checkRateLimits("inmail");
+          if (canInmail) {
+            // Get campaign context for message generation
+            const campaign = await this.api.getCampaignById(candidate.campaign_id);
+            if (campaign) {
+              const { message, reasoning } = await this.claude.generateMessage(
+                candidate,
+                {
+                  role_title: campaign.role_title,
+                  role_description: campaign.role_description,
+                  ideal_candidate_profile: campaign.ideal_candidate_profile,
+                }
+              );
+
+              await this.api.createApprovalRequest({
+                candidate_id: candidate.id,
+                campaign_id: candidate.campaign_id,
+                proposed_text: message,
+                context: reasoning,
+                reasoning,
+                approval_type: "inmail",
+              });
+
+              console.log(`📧 Created InMail fallback approval for ${candidate.name} (connection expired)`);
+            }
+          } else {
+            // No InMail credits — archive
+            await this.api.updatePipelineStatus(candidate.id, "archived");
+            console.log(`📦 Archived ${candidate.name} — connection expired, no InMail credits`);
+          }
+
+          await this.api.logAction({
+            candidate_id: candidate.id,
+            campaign_id: candidate.campaign_id,
+            action_type: "connection_expired",
+            success: true,
+          });
+        } catch (error) {
+          console.error(`❌ Error processing expired connection for ${candidate.id}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error("Error checking connection expiry:", error);
     }
   }
 
