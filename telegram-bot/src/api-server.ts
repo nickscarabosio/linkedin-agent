@@ -885,7 +885,8 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
 
       // Delete related records first
       await db.query(`DELETE FROM candidate_pipeline_progress WHERE candidate_id = ANY($1)`, [ids]);
-      await db.query(`DELETE FROM approvals WHERE candidate_id = ANY($1)`, [ids]);
+      await db.query(`DELETE FROM candidate_notes WHERE candidate_id = ANY($1)`, [ids]);
+      await db.query(`DELETE FROM approval_queue WHERE candidate_id = ANY($1)`, [ids]);
 
       const result = await db.query(
         `DELETE FROM candidates WHERE id = ANY($1) RETURNING id`,
