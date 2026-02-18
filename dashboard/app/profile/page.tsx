@@ -7,6 +7,7 @@ import { z } from "zod";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useToast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -31,9 +32,9 @@ interface UserProfile {
 export default function ProfilePage() {
   const { user } = useAuth();
   const api = getApiClient();
+  const { toast } = useToast();
 
   // Password form
-  const [pwMsg, setPwMsg] = useState("");
   const pwForm = useForm<PasswordInput>({
     resolver: zodResolver(passwordSchema),
   });
@@ -41,12 +42,12 @@ export default function ProfilePage() {
   const changePassword = useMutation({
     mutationFn: (data: PasswordInput) => api.patch("/api/me/password", data),
     onSuccess: () => {
-      setPwMsg("Password changed successfully");
+      toast.success("Password changed successfully");
       pwForm.reset();
     },
     onError: (err: unknown) => {
       const apiErr = err as { response?: { data?: { error?: string } } };
-      setPwMsg(apiErr.response?.data?.error || "Failed to change password");
+      toast.error(apiErr.response?.data?.error || "Failed to change password");
     },
   });
 
@@ -54,11 +55,17 @@ export default function ProfilePage() {
   const [linkCode, setLinkCode] = useState("");
   const generateLinkCode = useMutation({
     mutationFn: () => api.post("/api/me/telegram-link-code"),
-    onSuccess: (res) => setLinkCode(res.data.code),
+    onSuccess: (res) => {
+      setLinkCode(res.data.code);
+      toast.success("Link code generated");
+    },
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Something went wrong");
+    },
   });
 
   // LinkedIn credentials form
-  const [liMsg, setLiMsg] = useState("");
   const liForm = useForm<LinkedInInput>({
     resolver: zodResolver(linkedinSchema),
   });
@@ -71,12 +78,12 @@ export default function ProfilePage() {
   const saveLiCreds = useMutation({
     mutationFn: (data: LinkedInInput) => api.put("/api/me/linkedin-credentials", data),
     onSuccess: () => {
-      setLiMsg("LinkedIn credentials saved");
+      toast.success("LinkedIn credentials saved");
       liForm.setValue("linkedin_password", "");
     },
     onError: (err: unknown) => {
       const apiErr = err as { response?: { data?: { error?: string } } };
-      setLiMsg(apiErr.response?.data?.error || "Failed to save credentials");
+      toast.error(apiErr.response?.data?.error || "Failed to save credentials");
     },
   });
 
@@ -112,7 +119,6 @@ export default function ProfilePage() {
       {/* Change Password */}
       <section className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Change Password</h2>
-        {pwMsg && <p className="text-sm mb-3 text-blue-600">{pwMsg}</p>}
         <form onSubmit={pwForm.handleSubmit((data) => changePassword.mutate(data))} className="space-y-3">
           <Input
             type="password"
@@ -160,7 +166,6 @@ export default function ProfilePage() {
         <p className="text-sm text-gray-600 mb-4">
           Stored encrypted. The Electron app decrypts them locally.
         </p>
-        {liMsg && <p className="text-sm mb-3 text-blue-600">{liMsg}</p>}
         <form onSubmit={liForm.handleSubmit((data) => saveLiCreds.mutate(data))} className="space-y-3">
           <Input
             type="email"

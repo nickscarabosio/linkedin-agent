@@ -7,11 +7,14 @@ import { z } from "zod";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { TableSkeleton } from "@/components/ui/skeleton";
+import { QueryError } from "@/components/ui/query-error";
 import type { User } from "@/lib/types";
 
 const createUserSchema = z.object({
@@ -28,6 +31,7 @@ export default function AdminUsersPage() {
   const router = useRouter();
   const api = getApiClient();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
 
   const {
@@ -45,7 +49,7 @@ export default function AdminUsersPage() {
     return null;
   }
 
-  const { data: users, isLoading } = useQuery<User[]>({
+  const { data: users, isLoading, isError, refetch } = useQuery<User[]>({
     queryKey: ["admin-users"],
     queryFn: () => api.get("/api/admin/users").then((r) => r.data),
   });
@@ -53,16 +57,28 @@ export default function AdminUsersPage() {
   const createUser = useMutation({
     mutationFn: (data: CreateUserInput) => api.post("/api/admin/users", data),
     onSuccess: () => {
+      toast.success("User created");
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       setShowCreate(false);
       reset();
+    },
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Something went wrong");
     },
   });
 
   const toggleActive = useMutation({
     mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
       api.patch(`/api/admin/users/${id}`, { is_active }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
+    onSuccess: () => {
+      toast.success("User status updated");
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+    },
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Something went wrong");
+    },
   });
 
   return (
@@ -106,10 +122,14 @@ export default function AdminUsersPage() {
         </form>
       )}
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        {isLoading ? (
-          <div className="p-6 text-center text-gray-500">Loading...</div>
-        ) : (
+      {isLoading ? (
+        <TableSkeleton rows={4} columns={6} />
+      ) : isError ? (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <QueryError onRetry={refetch} />
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
@@ -150,8 +170,8 @@ export default function AdminUsersPage() {
               ))}
             </tbody>
           </table>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

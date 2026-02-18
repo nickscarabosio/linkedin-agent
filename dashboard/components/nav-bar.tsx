@@ -3,9 +3,12 @@
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronDown } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { getApiClient } from "@/lib/api";
 import { cn } from "@/lib/cn";
+import type { Approval } from "@/lib/types";
 
 type NavLink = { href: string; label: string };
 
@@ -13,16 +16,14 @@ type NavItem =
   | { type: "link"; href: string; label: string }
   | { type: "dropdown"; label: string; children: NavLink[] };
 
-const outreachLinks: NavLink[] = [
-  { href: "/campaigns", label: "Campaigns" },
-  { href: "/candidates", label: "Candidates" },
-  { href: "/approvals", label: "Approvals" },
+const campaignsLinks: NavLink[] = [
+  { href: "/campaigns", label: "All Campaigns" },
+  { href: "/admin/templates", label: "Snippets" },
+  { href: "/admin/pipelines", label: "Pipelines" },
 ];
 
 const adminLinks: NavLink[] = [
   { href: "/admin/users", label: "Users" },
-  { href: "/admin/templates", label: "Templates" },
-  { href: "/admin/pipelines", label: "Pipelines" },
   { href: "/admin/audit-log", label: "Audit Log" },
   { href: "/admin/settings", label: "Settings" },
 ];
@@ -30,7 +31,8 @@ const adminLinks: NavLink[] = [
 function buildNav(isAdmin: boolean): NavItem[] {
   const items: NavItem[] = [
     { type: "link", href: "/", label: "Dashboard" },
-    { type: "dropdown", label: "Outreach", children: outreachLinks },
+    { type: "link", href: "/candidates", label: "Candidates" },
+    { type: "dropdown", label: "Campaigns", children: campaignsLinks },
   ];
   if (isAdmin) {
     items.push({ type: "dropdown", label: "Admin", children: adminLinks });
@@ -43,6 +45,15 @@ export function NavBar() {
   const pathname = usePathname();
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
+  const api = getApiClient();
+
+  const { data: pendingApprovals } = useQuery<Approval[]>({
+    queryKey: ["approvals-pending"],
+    queryFn: () => api.get("/api/approvals", { params: { status: "pending" } }).then((r) => r.data),
+    enabled: !!user,
+  });
+
+  const pendingCount = pendingApprovals?.length ?? 0;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -72,13 +83,18 @@ export function NavBar() {
                   key={item.href}
                   href={item.href}
                   className={cn(
-                    "text-sm font-medium transition-colors",
+                    "text-sm font-medium transition-colors inline-flex items-center",
                     pathname === item.href
                       ? "text-blue-600"
                       : "text-gray-500 hover:text-gray-900"
                   )}
                 >
                   {item.label}
+                  {item.href === "/candidates" && pendingCount > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-red-500 text-white text-xs font-bold px-1.5">
+                      {pendingCount}
+                    </span>
+                  )}
                 </Link>
               ) : (
                 <DropdownMenu

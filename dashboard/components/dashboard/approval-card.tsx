@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, HelpCircle, X, ChevronRight, ExternalLink, Briefcase, Building2, MessageSquare, RotateCcw } from "lucide-react";
 import { getApiClient } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
@@ -34,6 +35,7 @@ export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: A
   const [editedText, setEditedText] = useState(approval.proposed_text);
   const api = getApiClient();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const isEdited = editedText !== approval.proposed_text;
 
@@ -51,7 +53,27 @@ export function ApprovalCard({ approval, onSnooze, selected, onToggleSelect }: A
       }
       return api.patch(`/api/approvals/${approval.id}`, payload);
     },
-    onSuccess: () => {
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["approvals-pending"] });
+      const snapshot = queryClient.getQueryData<Approval[]>(["approvals-pending"]);
+      queryClient.setQueryData<Approval[]>(["approvals-pending"], (old) =>
+        old?.filter((a) => a.id !== approval.id)
+      );
+      return { snapshot };
+    },
+    onSuccess: (_data, status) => {
+      toast.success(status === "approved" ? "Approved" : "Rejected");
+      queryClient.invalidateQueries({ queryKey: ["approvals-pending"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
+    },
+    onError: (err: unknown, _vars, context) => {
+      if (context?.snapshot) {
+        queryClient.setQueryData(["approvals-pending"], context.snapshot);
+      }
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Something went wrong");
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["approvals-pending"] });
       queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
     },
@@ -241,6 +263,7 @@ export function ApprovalList({ approvals }: ApprovalListProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const api = getApiClient();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const visible = approvals.filter((a) => !snoozed.has(a.id));
   const snoozedCount = snoozed.size;
@@ -283,8 +306,28 @@ export function ApprovalList({ approvals }: ApprovalListProps) {
   const batchMutation = useMutation({
     mutationFn: (status: "approved" | "rejected") =>
       api.post("/api/approvals/batch", { ids: Array.from(selected), status }),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["approvals-pending"] });
+      const snapshot = queryClient.getQueryData<Approval[]>(["approvals-pending"]);
+      queryClient.setQueryData<Approval[]>(["approvals-pending"], (old) =>
+        old?.filter((a) => !selected.has(a.id))
+      );
+      return { snapshot };
+    },
     onSuccess: () => {
+      toast.success(`${selected.size} approvals processed`);
       setSelected(new Set());
+      queryClient.invalidateQueries({ queryKey: ["approvals-pending"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
+    },
+    onError: (err: unknown, _vars, context) => {
+      if (context?.snapshot) {
+        queryClient.setQueryData(["approvals-pending"], context.snapshot);
+      }
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Something went wrong");
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["approvals-pending"] });
       queryClient.invalidateQueries({ queryKey: ["admin-stats"] });
     },

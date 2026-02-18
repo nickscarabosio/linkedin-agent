@@ -5,6 +5,8 @@ import { getApiClient } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
+import { TableSkeleton } from "@/components/ui/skeleton";
+import { QueryError } from "@/components/ui/query-error";
 import type { AuditLog } from "@/lib/types";
 
 export default function AuditLogPage() {
@@ -17,7 +19,7 @@ export default function AuditLogPage() {
     return null;
   }
 
-  const { data: logs, isLoading } = useQuery<AuditLog[]>({
+  const { data: logs, isLoading, isError, refetch } = useQuery<AuditLog[]>({
     queryKey: ["audit-log"],
     queryFn: () => api.get("/api/admin/audit-log").then((r) => r.data),
   });
@@ -26,12 +28,18 @@ export default function AuditLogPage() {
     <div className="space-y-6">
       <h1 className="text-3xl font-bold text-gray-900">Audit Log</h1>
 
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        {isLoading ? (
-          <div className="p-6 text-center text-gray-500">Loading...</div>
-        ) : !logs || logs.length === 0 ? (
-          <div className="p-6 text-center text-gray-500">No audit log entries.</div>
-        ) : (
+      {isLoading ? (
+        <TableSkeleton rows={8} columns={5} />
+      ) : isError ? (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <QueryError onRetry={refetch} />
+        </div>
+      ) : !logs || logs.length === 0 ? (
+        <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
+          No audit log entries.
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
@@ -62,8 +70,8 @@ export default function AuditLogPage() {
               ))}
             </tbody>
           </table>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

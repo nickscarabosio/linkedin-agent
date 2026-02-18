@@ -3,6 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { PauseCircle, PlayCircle } from "lucide-react";
 import { getApiClient } from "@/lib/api";
+import { useToast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cn";
 import type { Campaign, Candidate, Approval } from "@/lib/types";
@@ -45,13 +46,19 @@ interface CampaignControlPanelProps {
 export function CampaignControlPanel({ campaigns, candidates, approvals }: CampaignControlPanelProps) {
   const api = getApiClient();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const toggleMutation = useMutation({
     mutationFn: ({ id, newStatus }: { id: string; newStatus: "active" | "paused" }) =>
       api.patch(`/api/campaigns/${id}`, { status: newStatus }),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      toast.success(variables.newStatus === "paused" ? "Campaign paused" : "Campaign resumed");
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
       queryClient.invalidateQueries({ queryKey: ["campaigns-active"] });
+    },
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Something went wrong");
     },
   });
 

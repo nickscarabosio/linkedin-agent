@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
 import { useParams } from "next/navigation";
+import { useToast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { QueryError } from "@/components/ui/query-error";
 import Link from "next/link";
 import type { Campaign, Candidate, CandidatePipelineProgress } from "@/lib/types";
 import { AddCandidateForm } from "@/components/campaigns/add-candidate-form";
@@ -18,10 +21,11 @@ export default function CampaignDetailPage() {
   const { id } = useParams();
   const api = getApiClient();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [actionPanel, setActionPanel] = useState<ActionPanel>(null);
   const [generatingUrl, setGeneratingUrl] = useState(false);
 
-  const { data: campaign, isLoading } = useQuery<Campaign>({
+  const { data: campaign, isLoading, isError, refetch } = useQuery<Campaign>({
     queryKey: ["campaign", id],
     queryFn: () => api.get(`/api/campaigns/${id}`).then((r) => r.data),
   });
@@ -32,27 +36,11 @@ export default function CampaignDetailPage() {
     enabled: !!id,
   });
 
-  // Fetch pipeline progress for all candidates in this campaign
-  const [progressMap, setProgressMap] = useState<Record<string, CandidatePipelineProgress[]>>({});
-
-  useEffect(() => {
-    if (!candidates || !campaign?.pipeline_id) return;
-
-    const fetchProgress = async () => {
-      const map: Record<string, CandidatePipelineProgress[]> = {};
-      // Fetch in batches to avoid overwhelming the server
-      for (const candidate of candidates) {
-        try {
-          const { data } = await api.get(`/api/candidates/${candidate.id}/pipeline-progress`);
-          if (data.length > 0) map[candidate.id] = data;
-        } catch {
-          // ignore individual failures
-        }
-      }
-      setProgressMap(map);
-    };
-    fetchProgress();
-  }, [candidates, campaign?.pipeline_id]);
+  const { data: progressMap = {} } = useQuery<Record<string, CandidatePipelineProgress[]>>({
+    queryKey: ["campaign-pipeline-progress", id],
+    queryFn: () => api.get(`/api/campaigns/${id}/pipeline-progress`).then((r) => r.data),
+    enabled: !!id && !!campaign?.pipeline_id,
+  });
 
   const generateSearchUrl = async () => {
     if (!campaign) return;
@@ -66,16 +54,48 @@ export default function CampaignDetailPage() {
       if (data.linkedin_search_url) {
         await api.patch(`/api/campaigns/${id}`, { linkedin_search_url: data.linkedin_search_url });
         queryClient.invalidateQueries({ queryKey: ["campaign", id] });
+        toast.success("Search URL generated");
       }
-    } catch {
-      // silently fail — user can retry
+    } catch (err: unknown) {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Failed to generate search URL");
     } finally {
       setGeneratingUrl(false);
     }
   };
 
-  if (isLoading) return <div className="text-gray-500">Loading...</div>;
-  if (!campaign) return <div className="text-red-500">Campaign not found</div>;
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <Skeleton className="h-4 w-24 mb-4" />
+          <Skeleton className="h-8 w-64 mb-2" />
+          <Skeleton className="h-4 w-40" />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-white rounded-lg shadow p-6 space-y-4">
+            <Skeleton className="h-5 w-20" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-3/4" />
+            <Skeleton className="h-4 w-1/2" />
+          </div>
+          <div className="bg-white rounded-lg shadow p-6 space-y-4">
+            <Skeleton className="h-5 w-20" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-2/3" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isError || !campaign) {
+    return (
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <QueryError message={isError ? "Failed to load campaign" : "Campaign not found"} onRetry={refetch} />
+      </div>
+    );
+  }
 
   const statusCounts = (candidates || []).reduce<Record<string, number>>((acc, c) => {
     acc[c.status] = (acc[c.status] || 0) + 1;

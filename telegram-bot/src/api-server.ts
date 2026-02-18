@@ -720,6 +720,129 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
     }
   });
 
+  // GET /api/candidates/unified — all candidates with approval + pipeline data
+  app.get("/api/candidates/unified", async (req: Request, res: Response) => {
+    try {
+      const isAdmin = req.user!.role === "admin";
+      const status = req.query.status as string | undefined;
+      const campaign_id = req.query.campaign_id as string | undefined;
+      const has_pending_approval = req.query.has_pending_approval as string | undefined;
+      const date_from = req.query.date_from as string | undefined;
+      const date_to = req.query.date_to as string | undefined;
+      const owner_id = req.query.owner_id as string | undefined;
+
+      let query = `
+        SELECT c.*, camp.title AS campaign_title, camp.created_by_user_id AS owner_id,
+          u.name AS owner_name,
+          latest_aq.id AS approval_id, latest_aq.status AS approval_status,
+          latest_aq.approval_type, latest_aq.proposed_text, latest_aq.context AS approval_context,
+          latest_aq.created_at AS approval_created_at,
+          current_stage.stage_name AS pipeline_stage
+        FROM candidates c
+        JOIN campaigns camp ON c.campaign_id = camp.id
+        LEFT JOIN users u ON camp.created_by_user_id = u.id
+        LEFT JOIN LATERAL (
+          SELECT aq.* FROM approval_queue aq WHERE aq.candidate_id = c.id ORDER BY aq.created_at DESC LIMIT 1
+        ) latest_aq ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT ps.name AS stage_name FROM candidate_pipeline_progress cpp
+          JOIN pipeline_stages ps ON cpp.pipeline_stage_id = ps.id
+          WHERE cpp.candidate_id = c.id AND cpp.status = 'in_progress'
+          ORDER BY ps.stage_order LIMIT 1
+        ) current_stage ON TRUE`;
+
+      const params: any[] = [];
+      let idx = 1;
+
+      if (!isAdmin) {
+        query += ` JOIN user_campaign_assignments uca ON uca.campaign_id = camp.id AND uca.user_id = $${idx++}`;
+        params.push(req.user!.userId);
+      }
+
+      query += ` WHERE 1=1`;
+
+      if (status) {
+        query += ` AND c.status = $${idx++}`;
+        params.push(status);
+      }
+      if (campaign_id) {
+        query += ` AND c.campaign_id = $${idx++}`;
+        params.push(campaign_id);
+      }
+      if (has_pending_approval === "true") {
+        query += ` AND latest_aq.status = 'pending'`;
+      }
+      if (date_from) {
+        query += ` AND c.created_at >= $${idx++}`;
+        params.push(date_from);
+      }
+      if (date_to) {
+        query += ` AND c.created_at <= $${idx++}`;
+        params.push(date_to);
+      }
+      if (owner_id) {
+        query += ` AND camp.created_by_user_id = $${idx++}`;
+        params.push(owner_id);
+      }
+
+      query += ` ORDER BY c.created_at DESC LIMIT 500`;
+
+      const result = await db.query(query, params);
+      res.json(result.rows);
+    } catch (error) {
+      console.error("GET /api/candidates/unified error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // PATCH /api/candidates/bulk — bulk status update
+  app.patch("/api/candidates/bulk", async (req: Request, res: Response) => {
+    try {
+      const { ids, status } = req.body;
+      const validStatuses = ["new", "contacted", "responded", "rejected", "skipped", "archived"];
+
+      if (!Array.isArray(ids) || ids.length === 0) {
+        res.status(400).json({ error: "ids must be a non-empty array" });
+        return;
+      }
+      if (!validStatuses.includes(status)) {
+        res.status(400).json({ error: `Invalid status. Must be one of: ${validStatuses.join(", ")}` });
+        return;
+      }
+
+      const isAdmin = req.user!.role === "admin";
+
+      // Non-admin scoping: verify all IDs belong to assigned campaigns
+      if (!isAdmin) {
+        const check = await db.query(
+          `SELECT c.id FROM candidates c
+           JOIN user_campaign_assignments uca ON uca.campaign_id = c.campaign_id AND uca.user_id = $1
+           WHERE c.id = ANY($2)`,
+          [req.user!.userId, ids]
+        );
+        if (check.rows.length !== ids.length) {
+          res.status(403).json({ error: "Some candidates belong to campaigns you are not assigned to" });
+          return;
+        }
+      }
+
+      const result = await db.query(
+        `UPDATE candidates SET status = $1 WHERE id = ANY($2) RETURNING *`,
+        [status, ids]
+      );
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "candidates_bulk_status_update", `candidates:${ids.length}`, JSON.stringify({ ids, status })]
+      );
+
+      res.json(result.rows);
+    } catch (error) {
+      console.error("PATCH /api/candidates/bulk error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // GET /api/candidates — list all candidates (scoped by campaigns)
   app.get("/api/candidates", async (req: Request, res: Response) => {
     try {
@@ -1118,6 +1241,76 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
       res.json(result.rows[0]);
     } catch (error) {
       console.error("PATCH /api/campaigns/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // DELETE /api/campaigns/:id — admin-only, fails if campaign has candidates
+  app.delete("/api/campaigns/:id", async (req: Request, res: Response) => {
+    try {
+      if (req.user!.role !== "admin") {
+        res.status(403).json({ error: "Admin access required" });
+        return;
+      }
+
+      const { id } = req.params;
+
+      // Check for candidates
+      const candidateCheck = await db.query(
+        `SELECT COUNT(*) AS count FROM candidates WHERE campaign_id = $1`,
+        [id]
+      );
+      if (parseInt(candidateCheck.rows[0].count) > 0) {
+        res.status(409).json({ error: "Cannot delete campaign with candidates. Archive it or remove candidates first." });
+        return;
+      }
+
+      const result = await db.query(
+        `DELETE FROM campaigns WHERE id = $1 RETURNING *`,
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        res.status(404).json({ error: "Campaign not found" });
+        return;
+      }
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "campaign_deleted", `campaign:${id}`, JSON.stringify({ title: result.rows[0].title })]
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("DELETE /api/campaigns/:id error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/campaigns/:id/pipeline-progress — batch fetch pipeline progress for all candidates
+  app.get("/api/campaigns/:id/pipeline-progress", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const result = await db.query(
+        `SELECT cpp.*, ps.name AS stage_name, ps.stage_order, ps.action_type
+         FROM candidate_pipeline_progress cpp
+         JOIN pipeline_stages ps ON cpp.pipeline_stage_id = ps.id
+         JOIN candidates c ON cpp.candidate_id = c.id
+         WHERE c.campaign_id = $1
+         ORDER BY cpp.candidate_id, ps.stage_order ASC`,
+        [id]
+      );
+
+      const grouped: Record<string, typeof result.rows> = {};
+      for (const row of result.rows) {
+        if (!grouped[row.candidate_id]) grouped[row.candidate_id] = [];
+        grouped[row.candidate_id].push(row);
+      }
+
+      res.json(grouped);
+    } catch (error) {
+      console.error("GET /api/campaigns/:id/pipeline-progress error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });
