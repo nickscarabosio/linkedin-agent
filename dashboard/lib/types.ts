@@ -21,6 +21,10 @@ export interface Campaign {
   status: "active" | "paused" | "completed";
   priority: number;
   created_at: string;
+  created_by_user_id?: string | null;
+  created_by_name?: string | null;
+  assigned_user_names?: string[] | null;
+  assigned_users?: { id: string; name: string }[];
 }
 
 export interface Candidate {
@@ -32,8 +36,31 @@ export interface Candidate {
   company: string;
   location: string;
   linkedin_url: string;
-  status: "new" | "contacted" | "responded" | "rejected";
+  status: "new" | "contacted" | "responded" | "rejected" | "skipped" | "archived";
   created_at: string;
+}
+
+export interface UnifiedCandidate {
+  id: string;
+  campaign_id: string;
+  campaign_title: string;
+  name: string;
+  title: string;
+  company: string;
+  location: string;
+  linkedin_url: string;
+  status: "new" | "contacted" | "responded" | "rejected" | "skipped" | "archived";
+  created_at: string;
+  contacted_at: string | null;
+  owner_id: string | null;
+  owner_name: string | null;
+  approval_id: string | null;
+  approval_status: "pending" | "approved" | "rejected" | "sent" | "failed" | null;
+  approval_type: string | null;
+  proposed_text: string | null;
+  approval_context: string | null;
+  approval_created_at: string | null;
+  pipeline_stage: string | null;
 }
 
 export interface Approval {

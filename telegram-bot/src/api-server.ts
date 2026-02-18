@@ -162,6 +162,7 @@ export function createApiServer(db: Pool) {
   app.use("/api/candidates", requireAuth);
   app.use("/api/notes", requireAuth);
   app.use("/api/campaigns", requireAuth);
+  app.use("/api/users", requireAuth);
   app.use("/api/actions", requireAuth);
   app.use("/api/rate-limits", requireAuth);
   app.use("/api/settings", requireAuth);
@@ -1202,12 +1203,21 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
       let params: any[];
 
       if (isAdmin) {
-        query = `SELECT * FROM campaigns ORDER BY created_at DESC`;
+        query = `SELECT c.*, u.name AS created_by_name,
+          (SELECT array_agg(u2.name ORDER BY u2.name) FROM user_campaign_assignments uca2
+           JOIN users u2 ON u2.id = uca2.user_id WHERE uca2.campaign_id = c.id) AS assigned_user_names
+          FROM campaigns c
+          LEFT JOIN users u ON u.id = c.created_by_user_id
+          ORDER BY c.created_at DESC`;
         params = [];
       } else {
-        query = `SELECT c.* FROM campaigns c
-                 JOIN user_campaign_assignments uca ON uca.campaign_id = c.id AND uca.user_id = $1
-                 ORDER BY c.created_at DESC`;
+        query = `SELECT c.*, u.name AS created_by_name,
+          (SELECT array_agg(u2.name ORDER BY u2.name) FROM user_campaign_assignments uca2
+           JOIN users u2 ON u2.id = uca2.user_id WHERE uca2.campaign_id = c.id) AS assigned_user_names
+          FROM campaigns c
+          JOIN user_campaign_assignments uca ON uca.campaign_id = c.id AND uca.user_id = $1
+          LEFT JOIN users u ON u.id = c.created_by_user_id
+          ORDER BY c.created_at DESC`;
         params = [req.user!.userId];
       }
 
@@ -1223,14 +1233,26 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
   app.get("/api/campaigns/:id", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
-      const result = await db.query(`SELECT * FROM campaigns WHERE id = $1`, [id]);
+      const result = await db.query(
+        `SELECT c.*, u.name AS created_by_name
+         FROM campaigns c
+         LEFT JOIN users u ON u.id = c.created_by_user_id
+         WHERE c.id = $1`,
+        [id]
+      );
 
       if (result.rows.length === 0) {
         res.status(404).json({ error: "Campaign not found" });
         return;
       }
 
-      res.json(result.rows[0]);
+      const assignedResult = await db.query(
+        `SELECT u.id, u.name FROM user_campaign_assignments uca
+         JOIN users u ON u.id = uca.user_id WHERE uca.campaign_id = $1 ORDER BY u.name`,
+        [id]
+      );
+
+      res.json({ ...result.rows[0], assigned_users: assignedResult.rows });
     } catch (error) {
       console.error("GET /api/campaigns/:id error:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -1347,6 +1369,67 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
     }
   });
 
+  // PUT /api/campaigns/:id/assignments — manage team assignments
+  app.put("/api/campaigns/:id/assignments", async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { user_ids } = req.body as { user_ids: string[] };
+
+      if (!Array.isArray(user_ids)) {
+        res.status(400).json({ error: "user_ids array is required" });
+        return;
+      }
+
+      // Fetch campaign to check permissions
+      const campaign = await db.query(`SELECT created_by_user_id FROM campaigns WHERE id = $1`, [id]);
+      if (campaign.rows.length === 0) {
+        res.status(404).json({ error: "Campaign not found" });
+        return;
+      }
+
+      const isAdmin = req.user!.role === "admin";
+      const isCreator = campaign.rows[0].created_by_user_id === req.user!.userId;
+      if (!isAdmin && !isCreator) {
+        res.status(403).json({ error: "Only admins or the campaign creator can manage assignments" });
+        return;
+      }
+
+      // Always include the creator
+      const creatorId = campaign.rows[0].created_by_user_id;
+      const finalIds = new Set(user_ids);
+      if (creatorId) finalIds.add(creatorId);
+
+      // Transaction: delete all, then insert new set
+      await db.query("BEGIN");
+      await db.query(`DELETE FROM user_campaign_assignments WHERE campaign_id = $1`, [id]);
+      for (const userId of finalIds) {
+        await db.query(
+          `INSERT INTO user_campaign_assignments (user_id, campaign_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [userId, id]
+        );
+      }
+      await db.query("COMMIT");
+
+      await db.query(
+        `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
+        [req.user!.userId, "campaign_assignments_updated", `campaign:${id}`, JSON.stringify({ user_ids: Array.from(finalIds) })]
+      );
+
+      // Return updated list
+      const assignedResult = await db.query(
+        `SELECT u.id, u.name FROM user_campaign_assignments uca
+         JOIN users u ON u.id = uca.user_id WHERE uca.campaign_id = $1 ORDER BY u.name`,
+        [id]
+      );
+
+      res.json(assignedResult.rows);
+    } catch (error) {
+      await db.query("ROLLBACK").catch(() => {});
+      console.error("PUT /api/campaigns/:id/assignments error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   // GET /api/campaigns/:id/pipeline-progress — batch fetch pipeline progress for all candidates
   app.get("/api/campaigns/:id/pipeline-progress", async (req: Request, res: Response) => {
     try {
@@ -1378,7 +1461,7 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
   // POST /api/campaigns — create campaign
   app.post("/api/campaigns", async (req: Request, res: Response) => {
     try {
-      const { title, role_title, role_description, ideal_candidate_profile, linkedin_search_url, priority, pipeline_id } = req.body;
+      const { title, role_title, role_description, ideal_candidate_profile, linkedin_search_url, priority, pipeline_id, assigned_user_ids } = req.body;
 
       // If no pipeline_id provided, use the default pipeline
       let resolvedPipelineId = pipeline_id || null;
@@ -1399,14 +1482,25 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
       );
 
       // Auto-assign creator to the campaign
+      const campaignId = result.rows[0].id;
       await db.query(
         `INSERT INTO user_campaign_assignments (user_id, campaign_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-        [req.user!.userId, result.rows[0].id]
+        [req.user!.userId, campaignId]
       );
+
+      // Assign additional team members
+      if (Array.isArray(assigned_user_ids)) {
+        for (const userId of assigned_user_ids) {
+          await db.query(
+            `INSERT INTO user_campaign_assignments (user_id, campaign_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+            [userId, campaignId]
+          );
+        }
+      }
 
       await db.query(
         `INSERT INTO audit_logs (user_id, action, target, details) VALUES ($1, $2, $3, $4)`,
-        [req.user!.userId, "campaign_created", `campaign:${result.rows[0].id}`, JSON.stringify({ title })]
+        [req.user!.userId, "campaign_created", `campaign:${campaignId}`, JSON.stringify({ title })]
       );
 
       res.status(201).json(result.rows[0]);
@@ -1904,6 +1998,19 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
       res.json(result.rows);
     } catch (error) {
       console.error("GET /api/templates error:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /api/users/active — lightweight list of active users (id + name) for any authenticated user
+  app.get("/api/users/active", async (_req: Request, res: Response) => {
+    try {
+      const result = await db.query(
+        `SELECT id, name FROM users WHERE is_active = TRUE ORDER BY name`
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error("GET /api/users/active error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

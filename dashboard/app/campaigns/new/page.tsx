@@ -4,9 +4,10 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useRouter } from "next/navigation";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,18 +29,31 @@ type CampaignInput = z.infer<typeof campaignSchema>;
 export default function NewCampaignPage() {
   const router = useRouter();
   const api = getApiClient();
+  const { user } = useAuth();
   const [error, setError] = useState("");
   const [jdParsing, setJdParsing] = useState(false);
   const [jdSuccess, setJdSuccess] = useState(false);
   const [jdError, setJdError] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [dragActive, setDragActive] = useState(false);
+  const [assignedUserIds, setAssignedUserIds] = useState<Set<string>>(new Set());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { data: pipelines } = useQuery<Pipeline[]>({
     queryKey: ["pipelines"],
     queryFn: () => api.get("/api/pipelines").then((r) => r.data),
   });
+
+  const { data: activeUsers } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["users-active"],
+    queryFn: () => api.get("/api/users/active").then((r) => r.data),
+  });
+
+  useEffect(() => {
+    if (user?.id) {
+      setAssignedUserIds((prev) => new Set(prev).add(user.id));
+    }
+  }, [user?.id]);
 
   const defaultPipeline = pipelines?.find((p) => p.is_default);
 
@@ -118,6 +132,7 @@ export default function NewCampaignPage() {
         linkedin_search_url: data.linkedin_search_url || null,
         priority: parseInt(data.priority || "1", 10),
         pipeline_id: data.pipeline_id || null,
+        assigned_user_ids: Array.from(assignedUserIds),
       });
       router.push("/campaigns");
     } catch (err: unknown) {
@@ -260,6 +275,37 @@ export default function NewCampaignPage() {
           </Select>
           <p className="mt-1 text-xs text-gray-400">Leave empty to use the default pipeline</p>
         </div>
+
+        {activeUsers && activeUsers.length > 0 && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Team Members</label>
+            <p className="mt-1 text-xs text-gray-400">Select users who can view and manage this campaign</p>
+            <div className="mt-2 space-y-2">
+              {activeUsers.map((u) => {
+                const isCurrentUser = u.id === user?.id;
+                return (
+                  <label key={u.id} className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={assignedUserIds.has(u.id)}
+                      disabled={isCurrentUser}
+                      onChange={(e) => {
+                        setAssignedUserIds((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(u.id);
+                          else next.delete(u.id);
+                          return next;
+                        });
+                      }}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    {u.name}{isCurrentUser ? " (you)" : ""}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="flex gap-3 pt-4">
           <Button type="submit" disabled={isSubmitting}>

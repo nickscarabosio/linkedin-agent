@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { getApiClient } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import { useParams } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryError } from "@/components/ui/query-error";
+import { Dialog } from "@/components/ui/dialog";
 import Link from "next/link";
 import type { Campaign, Candidate, CandidatePipelineProgress } from "@/lib/types";
 import { AddCandidateForm } from "@/components/campaigns/add-candidate-form";
@@ -21,9 +23,12 @@ export default function CampaignDetailPage() {
   const { id } = useParams();
   const api = getApiClient();
   const queryClient = useQueryClient();
+  const { user, isAdmin } = useAuth();
   const { toast } = useToast();
   const [actionPanel, setActionPanel] = useState<ActionPanel>(null);
   const [generatingUrl, setGeneratingUrl] = useState(false);
+  const [teamDialogOpen, setTeamDialogOpen] = useState(false);
+  const [selectedUserIds, setSelectedUserIds] = useState<Set<string>>(new Set());
 
   const { data: campaign, isLoading, isError, refetch } = useQuery<Campaign>({
     queryKey: ["campaign", id],
@@ -41,6 +46,35 @@ export default function CampaignDetailPage() {
     queryFn: () => api.get(`/api/campaigns/${id}/pipeline-progress`).then((r) => r.data),
     enabled: !!id && !!campaign?.pipeline_id,
   });
+
+  const { data: activeUsers } = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["users-active"],
+    queryFn: () => api.get("/api/users/active").then((r) => r.data),
+    enabled: teamDialogOpen,
+  });
+
+  const assignmentsMutation = useMutation({
+    mutationFn: (userIds: string[]) =>
+      api.put(`/api/campaigns/${id}/assignments`, { user_ids: userIds }),
+    onSuccess: () => {
+      toast.success("Team updated");
+      setTeamDialogOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["campaign", id] });
+    },
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Failed to update team");
+    },
+  });
+
+  const canManageTeam = isAdmin || campaign?.created_by_user_id === user?.id;
+
+  const openTeamDialog = () => {
+    if (campaign?.assigned_users) {
+      setSelectedUserIds(new Set(campaign.assigned_users.map((u) => u.id)));
+    }
+    setTeamDialogOpen(true);
+  };
 
   const generateSearchUrl = async () => {
     if (!campaign) return;
@@ -166,6 +200,26 @@ export default function CampaignDetailPage() {
                 </dd>
               )}
             </div>
+            {campaign.created_by_name && (
+              <div>
+                <dt className="text-sm text-gray-500">Created by</dt>
+                <dd className="text-sm text-gray-900 mt-1">{campaign.created_by_name}</dd>
+              </div>
+            )}
+            <div>
+              <dt className="text-sm text-gray-500">Team</dt>
+              <dd className="text-sm text-gray-900 mt-1 flex items-center gap-2">
+                <span>{campaign.assigned_users?.map((u) => u.name).join(", ") || "—"}</span>
+                {canManageTeam && (
+                  <button
+                    onClick={openTeamDialog}
+                    className="text-xs text-blue-600 hover:underline"
+                  >
+                    Manage
+                  </button>
+                )}
+              </dd>
+            </div>
           </dl>
         </div>
 
@@ -255,6 +309,46 @@ export default function CampaignDetailPage() {
           </table>
         </div>
       )}
+
+      <Dialog open={teamDialogOpen} onClose={() => setTeamDialogOpen(false)}>
+        <h2 className="text-lg font-semibold text-gray-900">Manage Team</h2>
+        <p className="mt-1 text-sm text-gray-500">Select users who can view and manage this campaign.</p>
+        <div className="mt-4 space-y-2 max-h-64 overflow-y-auto">
+          {activeUsers?.map((u) => {
+            const isCreator = u.id === campaign?.created_by_user_id;
+            return (
+              <label key={u.id} className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={selectedUserIds.has(u.id)}
+                  disabled={isCreator}
+                  onChange={(e) => {
+                    setSelectedUserIds((prev) => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(u.id);
+                      else next.delete(u.id);
+                      return next;
+                    });
+                  }}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                {u.name}{isCreator ? " (creator)" : ""}
+              </label>
+            );
+          })}
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <Button variant="outline" onClick={() => setTeamDialogOpen(false)} disabled={assignmentsMutation.isPending}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => assignmentsMutation.mutate(Array.from(selectedUserIds))}
+            disabled={assignmentsMutation.isPending}
+          >
+            {assignmentsMutation.isPending ? "Saving..." : "Save"}
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }

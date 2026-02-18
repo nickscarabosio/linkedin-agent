@@ -92,6 +92,7 @@ export default function CampaignsPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Priority</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Team</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
               </thead>
@@ -112,6 +113,9 @@ export default function CampaignsPage() {
                         <Badge variant={statusVariant[c.status] ?? "default"}>{c.status}</Badge>
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-500">{c.priority}</td>
+                      <td className="px-6 py-4 text-sm text-gray-500 max-w-[200px] truncate" title={c.assigned_user_names?.join(", ") || ""}>
+                        {c.assigned_user_names?.join(", ") || "—"}
+                      </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-1">
                           {c.status !== "completed" && (
@@ -190,6 +194,9 @@ export default function CampaignsPage() {
                     <Badge variant={statusVariant[c.status] ?? "default"}>{c.status}</Badge>
                   </div>
                   <p className="text-sm text-gray-500">{c.role_title}</p>
+                  {c.created_by_name && (
+                    <p className="text-xs text-gray-400">by {c.created_by_name}</p>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-gray-400">Priority: {c.priority}</span>
                     <div className="flex items-center gap-1">
