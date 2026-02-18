@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { QueryError } from "@/components/ui/query-error";
 import { Dialog } from "@/components/ui/dialog";
 import Link from "next/link";
-import type { Campaign, Candidate, CandidatePipelineProgress, PipelineStatus, ScoreBucket, ScoringResult } from "@/lib/types";
+import type { Campaign, Candidate, CandidatePipelineProgress, PipelineStatus, ScoreBucket, ScoringResult, JobSpec } from "@/lib/types";
 import { AddCandidateForm } from "@/components/campaigns/add-candidate-form";
 import { CsvUpload } from "@/components/campaigns/csv-upload";
 import { PipelineProgressBar } from "@/components/campaigns/pipeline-progress-bar";
@@ -63,6 +63,8 @@ export default function CampaignDetailPage() {
   const [pipelineFilter, setPipelineFilter] = useState<string>("all");
   const [expandedScoreId, setExpandedScoreId] = useState<string | null>(null);
   const [scoringAll, setScoringAll] = useState(false);
+  const [jobSpec, setJobSpec] = useState<JobSpec>({});
+  const [jobSpecOpen, setJobSpecOpen] = useState(false);
 
   const { data: campaign, isLoading, isError, refetch } = useQuery<Campaign>({
     queryKey: ["campaign", id],
@@ -115,6 +117,25 @@ export default function CampaignDetailPage() {
       toast.error(apiErr.response?.data?.error || "Failed to score candidates");
     },
     onSettled: () => setScoringAll(false),
+  });
+
+  useEffect(() => {
+    if (campaign?.job_spec) {
+      setJobSpec(campaign.job_spec);
+    }
+  }, [campaign?.job_spec]);
+
+  const jobSpecMutation = useMutation({
+    mutationFn: (spec: JobSpec) =>
+      api.patch(`/api/campaigns/${id}`, { job_spec: spec }),
+    onSuccess: () => {
+      toast.success("Job specification saved");
+      queryClient.invalidateQueries({ queryKey: ["campaign", id] });
+    },
+    onError: (err: unknown) => {
+      const apiErr = err as { response?: { data?: { error?: string } } };
+      toast.error(apiErr.response?.data?.error || "Failed to save job specification");
+    },
   });
 
   const canManageTeam = isAdmin || campaign?.created_by_user_id === user?.id;
@@ -321,6 +342,29 @@ export default function CampaignDetailPage() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Job Specification */}
+      <div className="bg-white rounded-lg shadow">
+        <button
+          onClick={() => setJobSpecOpen(!jobSpecOpen)}
+          className="w-full flex items-center justify-between p-6 text-left"
+        >
+          <h3 className="font-semibold text-gray-900">Job Specification</h3>
+          {jobSpecOpen ? <ChevronDown className="h-5 w-5 text-gray-400" /> : <ChevronRight className="h-5 w-5 text-gray-400" />}
+        </button>
+        {jobSpecOpen && (
+          <div className="px-6 pb-6 space-y-4">
+            <JobSpecEditor value={jobSpec} onChange={setJobSpec} />
+            <Button
+              size="sm"
+              onClick={() => jobSpecMutation.mutate(jobSpec)}
+              disabled={jobSpecMutation.isPending}
+            >
+              {jobSpecMutation.isPending ? "Saving..." : "Save Job Spec"}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Action bar */}

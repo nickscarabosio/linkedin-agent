@@ -225,7 +225,7 @@ export function createApiServer(db: Pool) {
 
       const message = await anthropic.messages.create({
         model: "claude-sonnet-4-5-20250929",
-        max_tokens: 1024,
+        max_tokens: 2048,
         messages: [
           {
             role: "user",
@@ -235,8 +235,23 @@ export function createApiServer(db: Pool) {
 - "role_description": a concise summary of the role (2-4 sentences)
 - "ideal_candidate_profile": what the ideal candidate looks like (skills, experience, traits)
 - "linkedin_search_url": a LinkedIn People Search URL to find candidates matching this role. Build it using https://www.linkedin.com/search/results/people/?keywords=KEYWORDS&origin=GLOBAL_SEARCH_HEADER where KEYWORDS are URL-encoded search terms combining the role title and 2-3 key skills. Focus on terms a candidate would have in their profile headline or title. For example, for a Senior React Engineer role needing TypeScript and Node.js, use keywords like "Senior React Engineer TypeScript". Keep it focused — 3-5 keywords max.
+- "job_spec": an object with these optional keys (omit any that aren't clearly present in the JD):
+  - "function": the job function/department (e.g. "Engineering", "Sales", "Marketing")
+  - "role_level": seniority level (e.g. "Senior", "Staff", "Director", "VP")
+  - "role_one_liner": one-sentence elevator pitch for the role
+  - "industry_targets": array of target industries (e.g. ["SaaS", "FinTech"])
+  - "required_skills": array of must-have skills
+  - "nice_to_have_skills": array of nice-to-have skills
+  - "years_experience_min": minimum years of experience (number)
+  - "years_experience_ideal": ideal years of experience (number)
+  - "location": job location
+  - "remote_policy": one of "onsite", "hybrid", or "remote"
+  - "required_certifications": array of required certifications
+  - "education_required": boolean, whether a degree is required
+  - "education_preferred": preferred degree or field (e.g. "BS in Computer Science")
+  - "client_description_external": brief company/client description for candidates
 
-If a field is not clearly present, use an empty string.
+If a top-level field is not clearly present, use an empty string. For job_spec, only include keys where the JD provides clear information.
 
 Job Description:
 ${text}`,
@@ -263,7 +278,7 @@ ${text}`,
         }
       }
 
-      let parsed: Record<string, string>;
+      let parsed: Record<string, any>;
       try {
         parsed = JSON.parse(jsonStr);
       } catch {
@@ -278,6 +293,7 @@ ${text}`,
         role_description: parsed.role_description || "",
         ideal_candidate_profile: parsed.ideal_candidate_profile || "",
         linkedin_search_url: parsed.linkedin_search_url || "",
+        ...(parsed.job_spec && typeof parsed.job_spec === "object" ? { job_spec: parsed.job_spec } : {}),
       });
     } catch (error) {
       console.error("POST /api/ai/parse-jd error:", error);

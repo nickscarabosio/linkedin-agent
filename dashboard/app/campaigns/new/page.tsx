@@ -75,6 +75,9 @@ export default function NewCampaignPage() {
     if (data.role_description) setValue("role_description", data.role_description);
     if (data.ideal_candidate_profile) setValue("ideal_candidate_profile", data.ideal_candidate_profile);
     if (data.linkedin_search_url) setValue("linkedin_search_url", data.linkedin_search_url);
+    if (data.job_spec && Object.keys(data.job_spec).length > 0) {
+      setJobSpec((prev) => ({ ...prev, ...data.job_spec }));
+    }
     setJdSuccess(true);
     setTimeout(() => setJdSuccess(false), 5000);
   };
