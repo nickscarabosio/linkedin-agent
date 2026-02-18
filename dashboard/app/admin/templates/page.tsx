@@ -18,7 +18,7 @@ import type { MessageTemplate } from "@/lib/types";
 
 const templateSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  type: z.enum(["connection_request", "message", "follow_up"]),
+  type: z.enum(["connection_request", "message", "follow_up", "inmail"]),
   body: z.string().min(1, "Body is required"),
 });
 
@@ -28,6 +28,7 @@ const TYPE_LABELS: Record<string, string> = {
   connection_request: "Connection Request",
   message: "Message",
   follow_up: "Follow Up",
+  inmail: "InMail",
 };
 
 interface AdminTemplate extends MessageTemplate {
@@ -128,6 +129,7 @@ export default function AdminTemplatesPage() {
                 <option value="connection_request">Connection Request</option>
                 <option value="message">Message</option>
                 <option value="follow_up">Follow Up</option>
+                <option value="inmail">InMail</option>
               </Select>
               {errors.type && <p className="mt-1 text-sm text-red-600">{errors.type.message}</p>}
             </div>
@@ -176,6 +178,7 @@ export default function AdminTemplatesPage() {
                           <option value="connection_request">Connection Request</option>
                           <option value="message">Message</option>
                           <option value="follow_up">Follow Up</option>
+                          <option value="inmail">InMail</option>
                         </Select>
                       </td>
                       <td className="px-6 py-4">

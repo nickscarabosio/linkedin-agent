@@ -6,7 +6,7 @@ import { Select } from "@/components/ui/select";
 
 export interface StageInput {
   name: string;
-  action_type: "connection_request" | "message" | "follow_up" | "wait" | "reminder";
+  action_type: "connection_request" | "message" | "follow_up" | "wait" | "reminder" | "inmail" | "profile_view" | "withdraw";
   delay_days: number;
   requires_approval: boolean;
   template_id: string | null;
@@ -23,6 +23,9 @@ const ACTION_TYPES = [
   { value: "follow_up", label: "Follow-Up" },
   { value: "wait", label: "Wait" },
   { value: "reminder", label: "Reminder" },
+  { value: "inmail", label: "InMail" },
+  { value: "profile_view", label: "Profile View" },
+  { value: "withdraw", label: "Withdraw Request" },
 ] as const;
 
 export function PipelineStageEditor({ stages, onChange }: PipelineStageEditorProps) {

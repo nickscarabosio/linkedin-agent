@@ -109,7 +109,7 @@ export interface AdminStats {
 export interface MessageTemplate {
   id: string;
   name: string;
-  type: "connection_request" | "message" | "follow_up";
+  type: "connection_request" | "message" | "follow_up" | "inmail";
   body: string;
   created_by: string | null;
   created_at: string;
@@ -130,7 +130,7 @@ export interface PipelineStage {
   pipeline_id: string;
   stage_order: number;
   name: string;
-  action_type: "connection_request" | "message" | "follow_up" | "wait" | "reminder";
+  action_type: "connection_request" | "message" | "follow_up" | "wait" | "reminder" | "inmail" | "profile_view" | "withdraw";
   delay_days: number;
   requires_approval: boolean;
   template_id: string | null;

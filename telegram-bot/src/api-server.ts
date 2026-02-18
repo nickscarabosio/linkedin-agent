@@ -1936,6 +1936,8 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
           limit = limits.daily_connection_requests || 15;
         } else if (action === "message_sent" || action === "message") {
           limit = limits.daily_messages || 20;
+        } else if (action === "inmail") {
+          limit = limits.daily_messages || 20;
         }
       }
 
@@ -2260,7 +2262,7 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
         return;
       }
 
-      const validTypes = ["connection_request", "message", "follow_up"];
+      const validTypes = ["connection_request", "message", "follow_up", "inmail"];
       if (!validTypes.includes(type)) {
         res.status(400).json({ error: `type must be one of: ${validTypes.join(", ")}` });
         return;
@@ -2300,7 +2302,7 @@ ${ideal_candidate_profile ? `Ideal Candidate: ${ideal_candidate_profile}` : ""}`
         values.push(name);
       }
       if (type !== undefined) {
-        const validTypes = ["connection_request", "message", "follow_up"];
+        const validTypes = ["connection_request", "message", "follow_up", "inmail"];
         if (!validTypes.includes(type)) {
           res.status(400).json({ error: `type must be one of: ${validTypes.join(", ")}` });
           return;
